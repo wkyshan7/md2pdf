@@ -5,6 +5,16 @@ import type { DocxOptions, ExportMeta, PptxOptions, RasterPdfOptions, ThemeToken
 import { renderMarkdown } from "./core/render";
 import { buildThemeStyle } from "./core/themeCss";
 import { getCodeTheme } from "./core/highlightThemes";
+import {
+  assetRef,
+  buildFontFaceCss,
+  prependFamily,
+  removeFamily,
+  stripExtension,
+  stripKnownFamilies,
+  type FontAsset,
+  type ImageAsset,
+} from "./core/assets";
 import { exportHtml } from "./core/exportHtml";
 import { exportPdf as exportPdfViaPrint } from "./core/exportPdf";
 import { exportRasterPdf } from "./core/exportPdfRaster";
@@ -13,6 +23,8 @@ import { exportDocx } from "./core/exportDocx";
 import { downloadText, readTextFile, safeFilename } from "./core/download";
 import { SAMPLE_MARKDOWN } from "./core/sample";
 import { SettingsPanel } from "./ui/SettingsPanel";
+import { AssetsPanel } from "./ui/AssetsPanel";
+import { useAssets } from "./ui/useAssets";
 import { Preview } from "./ui/Preview";
 import { useScrollSync } from "./ui/useScrollSync";
 import { useMediaQuery } from "./ui/useMediaQuery";
@@ -33,6 +45,9 @@ interface PersistedState {
   pdf: RasterPdfOptions;
   editorW: number;
   panelW: number;
+  /** 当前启用为正文 / 代码的自定义字体 id（字体本体存在 IndexedDB） */
+  bodyFontId?: string;
+  codeFontId?: string;
 }
 
 const SPLITTER = 6;
@@ -126,11 +141,30 @@ export default function App() {
   const isMobile = useMediaQuery("(max-width: 900px)");
   const pwa = usePwaInstall();
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [showAssets, setShowAssets] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+  const quotaWarnedRef = useRef(false);
 
-  const { markdown, tokens, presetId, meta, flow, zoom, syncScroll, pptx, docx, pdf, editorW, panelW } = state;
+  const assets = useAssets();
+
+  const {
+    markdown,
+    tokens,
+    presetId,
+    meta,
+    flow,
+    zoom,
+    syncScroll,
+    pptx,
+    docx,
+    pdf,
+    editorW,
+    panelW,
+    bodyFontId,
+    codeFontId,
+  } = state;
 
   /* 持久化 */
   useEffect(() => {
@@ -138,7 +172,19 @@ export default function App() {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       } catch {
-        /* 配额溢出忽略 */
+        if (!quotaWarnedRef.current) {
+          quotaWarnedRef.current = true;
+          const id = Date.now();
+          setToasts((prev) => [
+            ...prev,
+            {
+              id,
+              text: "本地存储空间不足，文档与设置可能无法自动保存。建议用资源库引用图片，而不是把 data URL 直接粘进正文。",
+              kind: "error",
+            },
+          ]);
+          window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 7000);
+        }
       }
     }, 400);
     return () => window.clearTimeout(timer);
@@ -178,22 +224,178 @@ export default function App() {
     (id: string) => {
       const preset = THEME_PRESETS.find((p) => p.id === id);
       if (!preset) return;
-      setState((prev) => ({ ...prev, presetId: id, tokens: resolveTokens(preset) }));
+      setState((prev) => {
+        let next = resolveTokens(preset);
+        const body = prev.bodyFontId ? assets.fonts.find((f) => f.id === prev.bodyFontId) : undefined;
+        if (body) next = { ...next, fontFamily: prependFamily(body.family, next.fontFamily) };
+        const code = prev.codeFontId ? assets.fonts.find((f) => f.id === prev.codeFontId) : undefined;
+        if (code) next = { ...next, codeFontFamily: prependFamily(code.family, next.codeFontFamily) };
+        return { ...prev, presetId: id, tokens: next };
+      });
     },
-    [],
+    [assets.fonts],
   );
 
   const resetTokens = useCallback(() => {
-    setState((prev) => ({ ...prev, tokens: { ...DEFAULT_TOKENS, customCss: prev.tokens.customCss } }));
-  }, []);
+    setState((prev) => {
+      let next: ThemeTokens = { ...DEFAULT_TOKENS, customCss: prev.tokens.customCss };
+      const body = prev.bodyFontId ? assets.fonts.find((f) => f.id === prev.bodyFontId) : undefined;
+      if (body) next = { ...next, fontFamily: prependFamily(body.family, next.fontFamily) };
+      const code = prev.codeFontId ? assets.fonts.find((f) => f.id === prev.codeFontId) : undefined;
+      if (code) next = { ...next, codeFontFamily: prependFamily(code.family, next.codeFontFamily) };
+      return { ...prev, tokens: next };
+    });
+  }, [assets.fonts]);
+
+  /* ── 自定义字体：启用 / 关闭 / 重命名 ─────────── */
+  const setBodyFontAsset = useCallback(
+    (asset: FontAsset | null) => {
+      setState((prev) => {
+        let stack = stripKnownFamilies(prev.tokens.fontFamily, assets.fonts);
+        if (asset) stack = prependFamily(asset.family, stack);
+        return { ...prev, bodyFontId: asset?.id, tokens: { ...prev.tokens, fontFamily: stack } };
+      });
+    },
+    [assets.fonts],
+  );
+
+  const setCodeFontAsset = useCallback(
+    (asset: FontAsset | null) => {
+      setState((prev) => {
+        let stack = stripKnownFamilies(prev.tokens.codeFontFamily, assets.fonts);
+        if (asset) stack = prependFamily(asset.family, stack);
+        return { ...prev, codeFontId: asset?.id, tokens: { ...prev.tokens, codeFontFamily: stack } };
+      });
+    },
+    [assets.fonts],
+  );
+
+  const applyBodyFont = useCallback(
+    (id: string | null) => {
+      setBodyFontAsset(id ? assets.fonts.find((f) => f.id === id) ?? null : null);
+    },
+    [assets.fonts, setBodyFontAsset],
+  );
+
+  const applyCodeFont = useCallback(
+    (id: string | null) => {
+      setCodeFontAsset(id ? assets.fonts.find((f) => f.id === id) ?? null : null);
+    },
+    [assets.fonts, setCodeFontAsset],
+  );
+
+  const handleImportFonts = useCallback(
+    async (files: File[]) => {
+      const report = await assets.addFonts(files);
+      if (report.added.length) {
+        toast(`已导入 ${report.added.length} 个字体`, "success");
+        if (!bodyFontId) setBodyFontAsset(report.added[0]);
+      }
+      for (const err of report.errors) toast(err, "error");
+    },
+    [assets, bodyFontId, setBodyFontAsset, toast],
+  );
+
+  const handleImportImages = useCallback(
+    async (files: File[]) => {
+      const report = await assets.addImages(files);
+      if (report.added.length) toast(`已导入 ${report.added.length} 张图片，可在资源库插入到正文`, "success");
+      for (const err of report.errors) toast(err, "error");
+    },
+    [assets, toast],
+  );
+
+  const handleDeleteAsset = useCallback(
+    (id: string) => {
+      if (bodyFontId === id) applyBodyFont(null);
+      if (codeFontId === id) applyCodeFont(null);
+      void assets.remove(id);
+      toast("已删除资源", "info");
+    },
+    [bodyFontId, codeFontId, applyBodyFont, applyCodeFont, assets, toast],
+  );
+
+  const handleUpdateFont = useCallback(
+    (id: string, patch: Partial<FontAsset>) => {
+      const current = assets.fonts.find((f) => f.id === id);
+      if (current && patch.family && patch.family !== current.family) {
+        const newFamily = patch.family;
+        const oldFamily = current.family;
+        setState((prev) => {
+          let next = prev.tokens;
+          if (prev.bodyFontId === id) {
+            next = { ...next, fontFamily: prependFamily(newFamily, removeFamily(oldFamily, next.fontFamily)) };
+          }
+          if (prev.codeFontId === id) {
+            next = {
+              ...next,
+              codeFontFamily: prependFamily(newFamily, removeFamily(oldFamily, next.codeFontFamily)),
+            };
+          }
+          return { ...prev, tokens: next };
+        });
+      }
+      void assets.updateFont(id, patch);
+    },
+    [assets],
+  );
+
+  const handleClearAllAssets = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      bodyFontId: undefined,
+      codeFontId: undefined,
+      tokens: {
+        ...prev.tokens,
+        fontFamily: stripKnownFamilies(prev.tokens.fontFamily, assets.fonts),
+        codeFontFamily: stripKnownFamilies(prev.tokens.codeFontFamily, assets.fonts),
+      },
+    }));
+    void assets.clearAll();
+    toast("已清空全部资源", "info");
+  }, [assets, toast]);
+
+  /* ── 图片插入 ─────────────────────────────── */
+  const insertAtCursor = useCallback(
+    (snippet: string) => {
+      const el = editorRef.current;
+      const start = el?.selectionStart ?? markdown.length;
+      const end = el?.selectionEnd ?? start;
+      const next = markdown.slice(0, start) + snippet + markdown.slice(end);
+      update({ markdown: next });
+      requestAnimationFrame(() => {
+        if (!el) return;
+        el.focus();
+        const pos = start + snippet.length;
+        try {
+          el.setSelectionRange(pos, pos);
+        } catch {
+          /* 部分环境不支持，忽略 */
+        }
+      });
+    },
+    [markdown, update],
+  );
+
+  const handleInsertImage = useCallback(
+    (asset: ImageAsset, mode: "ref" | "dataUrl") => {
+      const alt = stripExtension(asset.name) || "图片";
+      const src = mode === "ref" ? assetRef(asset.id) : asset.dataUrl;
+      insertAtCursor(`![${alt}](${src})`);
+      toast(mode === "ref" ? "已插入图片引用（导出时自动内嵌）" : "已插入内嵌图片", "success");
+      if (isMobile) setMobileTab("editor");
+    },
+    [insertAtCursor, toast, isMobile],
+  );
 
   /* 预览：延迟渲染，避免大文档卡顿 */
   const deferredMarkdown = useDeferredValue(markdown);
   const rendered = useMemo(
-    () => renderMarkdown(deferredMarkdown, { numbered: tokens.headingNumbered }),
-    [deferredMarkdown, tokens.headingNumbered],
+    () => renderMarkdown(deferredMarkdown, { numbered: tokens.headingNumbered, assets: assets.map }),
+    [deferredMarkdown, tokens.headingNumbered, assets.map],
   );
   const themeStyle = useMemo(() => buildThemeStyle(tokens, ":root"), [tokens]);
+  const fontFacesCss = useMemo(() => buildFontFaceCss(assets.fonts, "swap"), [assets.fonts]);
   const codeTheme = useMemo(() => getCodeTheme(tokens.codeTheme), [tokens.codeTheme]);
 
   /* 编辑器 ↔ 预览 同步滚动 */
@@ -263,8 +465,8 @@ export default function App() {
 
   const doExportHtml = () =>
     withBusy("HTML 导出", () => {
-      exportHtml(markdown, tokens, meta, { flow });
-      toast("已生成单文件 HTML", "success");
+      exportHtml(markdown, tokens, meta, { flow, assets: assets.map, fonts: assets.fonts });
+      toast("已生成单文件 HTML（含字体与图片）", "success");
     });
 
   const doExportPdf = () =>
@@ -282,19 +484,19 @@ export default function App() {
   /** 备选：走浏览器打印（矢量文字，可选中/搜索） */
   const doPrintPdf = () =>
     withBusy("PDF 打印", async () => {
-      await exportPdfViaPrint(markdown, tokens, meta);
+      await exportPdfViaPrint(markdown, tokens, meta, { assets: assets.map, fonts: assets.fonts });
       toast("已打开打印对话框，请选择「另存为 PDF」", "success");
     });
 
   const doExportPptx = () =>
     withBusy("PPTX 导出", async () => {
-      const res = await exportPptx(markdown, tokens, meta, pptx);
+      const res = await exportPptx(markdown, tokens, meta, pptx, assets.map);
       toast(`已生成 PPTX（${res.slideCount} 页）`, "success");
     });
 
   const doExportDocx = () =>
     withBusy("DOCX 导出", async () => {
-      const res = await exportDocx(markdown, tokens, meta, docx);
+      const res = await exportDocx(markdown, tokens, meta, docx, assets.map);
       toast(`已生成 DOCX（${res.paragraphs} 个块）`, "success");
     });
 
@@ -428,6 +630,7 @@ export default function App() {
     <div className="app">
       <style id="md-theme" dangerouslySetInnerHTML={{ __html: themeStyle }} />
       <style id="md-hljs" dangerouslySetInnerHTML={{ __html: codeTheme.css }} />
+      {fontFacesCss && <style id="md-fonts" dangerouslySetInnerHTML={{ __html: fontFacesCss }} />}
 
       <header className="topbar">
         <div className="brand">
@@ -452,6 +655,14 @@ export default function App() {
           </button>
         )}
         <span className="spacer" />
+        <button
+          className={`btn${showAssets ? " active" : ""}`}
+          onClick={() => setShowAssets(true)}
+          title="导入并管理自定义字体与图片"
+        >
+          🗂 资源库
+          {assets.fonts.length + assets.images.length > 0 ? ` ${assets.fonts.length + assets.images.length}` : ""}
+        </button>
         <button className="btn" onClick={() => update({ markdown: SAMPLE_MARKDOWN })}>
           载入示例
         </button>
@@ -581,6 +792,7 @@ export default function App() {
             presetId={presetId}
             onPreset={applyPreset}
             onReset={resetTokens}
+            onOpenAssets={() => setShowAssets(true)}
           />
         </aside>
       </div>
@@ -607,6 +819,25 @@ export default function App() {
           if (f) void openFile(f);
           e.target.value = "";
         }}
+      />
+
+      <AssetsPanel
+        open={showAssets}
+        onClose={() => setShowAssets(false)}
+        fonts={assets.fonts}
+        images={assets.images}
+        bodyFontId={bodyFontId}
+        codeFontId={codeFontId}
+        persistent={assets.persistent}
+        onImportFonts={handleImportFonts}
+        onImportImages={handleImportImages}
+        onDelete={handleDeleteAsset}
+        onUpdateFont={handleUpdateFont}
+        onApplyBodyFont={applyBodyFont}
+        onApplyCodeFont={applyCodeFont}
+        onInsertImage={handleInsertImage}
+        onClearAll={handleClearAllAssets}
+        onToast={toast}
       />
 
       <div className="toast-host">

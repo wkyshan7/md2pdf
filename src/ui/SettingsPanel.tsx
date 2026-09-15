@@ -53,6 +53,8 @@ export interface SettingsPanelProps {
   presetId: string;
   onPreset: (id: string) => void;
   onReset: () => void;
+  /** 打开资源库（导入 / 管理字体与图片） */
+  onOpenAssets: () => void;
 }
 
 export function SettingsPanel(props: SettingsPanelProps) {
@@ -146,6 +148,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
       </Section>
 
       <Section title="字体与配色" open>
+        <button className="btn" onClick={props.onOpenAssets}>
+          🗂 打开资源库（导入字体 / 图片）
+        </button>
         <Select
           label="字体"
           value={FONT_OPTIONS.some((f) => f.value === t.fontFamily) ? t.fontFamily : "__custom"}
@@ -168,6 +173,10 @@ export function SettingsPanel(props: SettingsPanelProps) {
         <ColorInput label="背景颜色" value={t.bgColor} onChange={(v) => patch({ bgColor: v })} />
         <ColorInput label="强调色" value={t.accentColor} onChange={(v) => patch({ accentColor: v })} />
         <ColorInput label="链接颜色" value={t.linkColor} onChange={(v) => patch({ linkColor: v })} />
+        <div className="hint">
+          在资源库中导入 TTF / OTF / WOFF 字体后，可一键设为正文或代码字体；
+          字体会内嵌进导出的 PDF / HTML，图片同理。
+        </div>
       </Section>
 
       <Section title="标题">

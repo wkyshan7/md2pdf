@@ -29,9 +29,11 @@ import type { ParagraphChild } from "docx";
 import type { Token } from "markdown-it";
 import { parse } from "./parser";
 import { PAGE_SIZES, type DocxOptions, type ExportMeta, type ThemeTokens } from "./types";
+import { primaryFamily, resolveAssetSrc, type AssetMap } from "./assets";
 import { downloadBlob, safeFilename } from "./download";
 
-const CODE_FONT = "Consolas";
+/** 取代码字体栈第一个族名，用于 docx 的 run 字体 */
+const codeFontOf = (tokens: ThemeTokens): string => primaryFamily(tokens.codeFontFamily, "Consolas");
 
 const HEADING_LEVELS = [
   HeadingLevel.HEADING_1,
@@ -58,8 +60,9 @@ interface RunState {
   strike: boolean;
 }
 
-function imageRun(src: string, alt: string): ImageRun | null {
-  const m = /^data:image\/(png|jpe?g|gif|bmp);base64,(.+)$/i.exec(src);
+function imageRun(src: string, alt: string, assets?: AssetMap): ImageRun | null {
+  const resolved = resolveAssetSrc(src, assets);
+  const m = /^data:image\/(png|jpe?g|gif|bmp);base64,(.+)$/i.exec(resolved);
   if (!m) return null;
   const rawType = m[1].toLowerCase();
   const type = (rawType === "jpeg" ? "jpg" : rawType) as "png" | "jpg" | "gif" | "bmp";
@@ -74,7 +77,7 @@ function imageRun(src: string, alt: string): ImageRun | null {
   });
 }
 
-function inlineRuns(inline: Token | undefined, tokens: ThemeTokens): ParagraphChild[] {
+function inlineRuns(inline: Token | undefined, tokens: ThemeTokens, assets?: AssetMap): ParagraphChild[] {
   const out: ParagraphChild[] = [];
   if (!inline?.children) {
     if (inline?.content) out.push(new TextRun(inline.content));
@@ -120,7 +123,7 @@ function inlineRuns(inline: Token | undefined, tokens: ThemeTokens): ParagraphCh
         out.push(
           new TextRun({
             text: c.content,
-            font: CODE_FONT,
+            font: codeFontOf(tokens),
             size: tokens.codeFontSize * 2,
             color: hex(tokens.inlineCodeColor),
             shading: { type: ShadingType.CLEAR, fill: hex(tokens.inlineCodeBg) },
@@ -134,10 +137,10 @@ function inlineRuns(inline: Token | undefined, tokens: ThemeTokens): ParagraphCh
         out.push(new TextRun({ break: 1 }));
         break;
       case "math_inline":
-        out.push(new TextRun({ text: c.content, font: CODE_FONT, italics: true }));
+        out.push(new TextRun({ text: c.content, font: codeFontOf(tokens), italics: true }));
         break;
       case "math_block":
-        out.push(new TextRun({ text: c.content, font: CODE_FONT }));
+        out.push(new TextRun({ text: c.content, font: codeFontOf(tokens) }));
         break;
       case "html_inline": {
         const txt = stripHtml(c.content);
@@ -146,7 +149,7 @@ function inlineRuns(inline: Token | undefined, tokens: ThemeTokens): ParagraphCh
       }
       case "image": {
         const src = String(c.attrGet("src") ?? "");
-        const run = imageRun(src, c.content || "");
+        const run = imageRun(src, c.content || "", assets);
         if (run) out.push(run);
         else out.push(new TextRun({ text: `[图片：${c.content || src}]`, italics: true, color: "888888" }));
         break;
@@ -159,7 +162,7 @@ function inlineRuns(inline: Token | undefined, tokens: ThemeTokens): ParagraphCh
           const cc = kids[j];
           if (cc.type === "text") inner.push(new TextRun({ text: cc.content, style: "Hyperlink" }));
           else if (cc.type === "code_inline")
-            inner.push(new TextRun({ text: cc.content, style: "Hyperlink", font: CODE_FONT }));
+            inner.push(new TextRun({ text: cc.content, style: "Hyperlink", font: codeFontOf(tokens) }));
           else if (cc.content) inner.push(new TextRun({ text: cc.content, style: "Hyperlink" }));
           j++;
         }
@@ -186,6 +189,7 @@ interface WalkContext {
   counters: number[];
   numbered: boolean;
   codeShading: boolean;
+  assets?: AssetMap;
 }
 
 function codeParagraph(code: string, ctx: WalkContext): Paragraph {
@@ -196,7 +200,7 @@ function codeParagraph(code: string, ctx: WalkContext): Paragraph {
     runs.push(
       new TextRun({
         text: line.length ? line : " ",
-        font: CODE_FONT,
+        font: codeFontOf(ctx.tokens),
         size: ctx.tokens.codeFontSize * 2,
         color: hex(ctx.tokens.codeBlockColor),
       }),
@@ -222,7 +226,7 @@ function listParagraph(
   level: number,
 ): Paragraph {
   return new Paragraph({
-    children: inlineRuns(inline, ctx.tokens),
+    children: inlineRuns(inline, ctx.tokens, ctx.assets),
     numbering: { reference: ordered ? "md-ordered" : "md-bullet", level: Math.min(level, 4) },
     spacing: { after: 60, line: Math.round(ctx.tokens.lineHeight * 240) },
   });
@@ -256,7 +260,7 @@ function walk(tokens: Token[], ctx: WalkContext): (Paragraph | Table)[] {
         for (let j = level; j < 6; j++) ctx.counters[j] = 0;
         prefix = `${ctx.counters.slice(0, level).join(".")} `;
       }
-      const runs = inlineRuns(inline, ctx.tokens);
+      const runs = inlineRuns(inline, ctx.tokens, ctx.assets);
       if (prefix) runs.unshift(new TextRun({ text: prefix, color: hex(ctx.tokens.accentColor) }));
       out.push(
         new Paragraph({
@@ -292,7 +296,7 @@ function walk(tokens: Token[], ctx: WalkContext): (Paragraph | Table)[] {
       const inline = tokens[i + 1];
       out.push(
         new Paragraph({
-          children: inlineRuns(inline, ctx.tokens),
+          children: inlineRuns(inline, ctx.tokens, ctx.assets),
           spacing: { after: Math.round(ctx.tokens.paraSpacing * 240), line: Math.round(ctx.tokens.lineHeight * 240) },
         }),
       );
@@ -355,7 +359,7 @@ function walk(tokens: Token[], ctx: WalkContext): (Paragraph | Table)[] {
       for (const p of paras) {
         out.push(
           new Paragraph({
-            children: inlineRuns(p, ctx.tokens),
+            children: inlineRuns(p, ctx.tokens, ctx.assets),
             spacing: { after: 120, line: Math.round(ctx.tokens.lineHeight * 240) },
             indent: { left: 360 },
             border: {
@@ -386,7 +390,7 @@ function walk(tokens: Token[], ctx: WalkContext): (Paragraph | Table)[] {
                 new TableCell({
                   children: [
                     new Paragraph({
-                      children: inlineRuns(inline, ctx.tokens),
+                      children: inlineRuns(inline, ctx.tokens, ctx.assets),
                       spacing: { after: 0 },
                       alignment: isHeader && ctx.tokens.headingAlign === "center" ? AlignmentType.CENTER : undefined,
                     }),
@@ -465,6 +469,7 @@ export function buildDocxDocument(
   tokens: ThemeTokens,
   meta: ExportMeta,
   options: DocxOptions,
+  assets?: AssetMap,
 ): { doc: Document; paragraphs: number } {
   const { tokens: mdTokens } = parse(markdown);
   const ctx: WalkContext = {
@@ -472,6 +477,7 @@ export function buildDocxDocument(
     counters: [0, 0, 0, 0, 0, 0],
     numbered: options.headingNumbered,
     codeShading: options.codeShading,
+    assets,
   };
   const body = walk(mdTokens, ctx);
 
@@ -536,7 +542,7 @@ export function buildDocxDocument(
     styles: {
       default: {
         document: {
-          run: { font: "Microsoft YaHei", size: tokens.fontSize * 2, color: hex(tokens.textColor) },
+          run: { font: primaryFamily(tokens.fontFamily, "Microsoft YaHei"), size: tokens.fontSize * 2, color: hex(tokens.textColor) },
           paragraph: { spacing: { line: Math.round(tokens.lineHeight * 240) } },
         },
         hyperlink: { run: { color: hex(tokens.linkColor), underline: { type: UnderlineType.SINGLE } } },
@@ -575,8 +581,9 @@ export async function exportDocx(
   tokens: ThemeTokens,
   meta: ExportMeta,
   options: DocxOptions,
+  assets?: AssetMap,
 ): Promise<DocxResult> {
-  const { doc, paragraphs } = buildDocxDocument(markdown, tokens, meta, options);
+  const { doc, paragraphs } = buildDocxDocument(markdown, tokens, meta, options, assets);
   const blob = await Packer.toBlob(doc);
   downloadBlob(blob, `${safeFilename(meta.title, "document")}.docx`);
   return { paragraphs };

@@ -2,6 +2,7 @@ import DOMPurify from "dompurify";
 import type { Config } from "dompurify";
 import { parse, renderTokens, withHeadingNumbers } from "./parser";
 import type { Heading } from "./parser";
+import type { AssetMap } from "./assets";
 
 const PURIFY_CONFIG: Config = {
   USE_PROFILES: { html: true, mathMl: true, svg: true },
@@ -18,10 +19,11 @@ export interface RenderResult {
 /** markdown → 安全的 HTML 片段（已高亮、已净化） */
 export function renderMarkdown(
   markdown: string,
-  options: { numbered?: boolean } = {},
+  options: { numbered?: boolean; assets?: AssetMap } = {},
 ): RenderResult {
   const { tokens, env, headings } = parse(markdown);
   const finalTokens = options.numbered ? withHeadingNumbers(tokens) : tokens;
+  if (options.assets) env.assets = options.assets;
   const raw = renderTokens(finalTokens, env);
   const html = DOMPurify.sanitize(raw, PURIFY_CONFIG) as unknown as string;
   return { html, headings };

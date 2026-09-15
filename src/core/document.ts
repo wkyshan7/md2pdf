@@ -2,6 +2,7 @@ import type { ExportMeta, ThemeTokens } from "./types";
 import { buildThemeStyle } from "./themeCss";
 import { getCodeTheme } from "./highlightThemes";
 import { escapeHtml } from "./parser";
+import { buildFontFaceCss, type FontAsset } from "./assets";
 
 export const KATEX_CDN =
   "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css";
@@ -16,6 +17,8 @@ export interface DocShellOptions {
   includeKatex?: boolean;
   /** 是否包含打印规则（PDF 用） */
   forPrint?: boolean;
+  /** 用户导入的字体，会以 @font-face + data URL 内联，保证任何环境都能正确显示 */
+  fonts?: FontAsset[];
 }
 
 /** 生成完整、自包含的 HTML 文档（HTML 导出与 PDF 打印共用） */
@@ -26,9 +29,11 @@ export function buildStandaloneHtml({
   flow = false,
   includeKatex = false,
   forPrint = false,
+  fonts = [],
 }: DocShellOptions): string {
   const themeStyle = buildThemeStyle(tokens, ":root");
   const codeCss = getCodeTheme(tokens.codeTheme).css;
+  const fontCss = fonts.length ? buildFontFaceCss(fonts, "block") : "";
   const runningHeader = meta.header.trim();
   const runningFooter = meta.footer.trim();
 
@@ -74,7 +79,7 @@ ${forPrint ? "" : "body { padding: 28px 12px; }"}
 <title>${escapeHtml(meta.title || "Markdown 文档")}</title>${author ? `\n<meta name="author" content="${escapeHtml(author)}">` : ""}${
     meta.subject.trim() ? `\n<meta name="description" content="${escapeHtml(meta.subject.trim())}">` : ""
   }
-${includeKatex ? `<link rel="stylesheet" href="${KATEX_CDN}">\n` : ""}<style id="md-theme">
+${includeKatex ? `<link rel="stylesheet" href="${KATEX_CDN}">\n` : ""}${fontCss ? `<style id="md-fonts">\n${fontCss}\n</style>\n` : ""}<style id="md-theme">
 ${themeStyle}
 </style>
 <style id="md-hljs">

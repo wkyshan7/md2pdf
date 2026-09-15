@@ -10,6 +10,18 @@ import { resolveTokens, THEME_PRESETS } from "../src/core/themes";
 import { SAMPLE_MARKDOWN } from "../src/core/sample";
 import { buildPptxPresentation } from "../src/core/exportPptx";
 import { buildDocxDocument } from "../src/core/exportDocx";
+import {
+  buildFontFaceCss,
+  prependFamily,
+  primaryFamily,
+  removeFamily,
+  resolveAssetSrc,
+  stripKnownFamilies,
+  type AssetMap,
+  type FontAsset,
+  type ImageAsset,
+} from "../src/core/assets";
+import { parseFontMeta } from "../src/core/fontMeta";
 import type { ExportMeta, PptxOptions, DocxOptions } from "../src/core/types";
 
 const meta: ExportMeta = {
@@ -366,6 +378,143 @@ function testTypographyCss(): void {
   // 锚点在标题内部，且应当是标题的第一个子元素
   const headingHtml = renderTokens(parse("## 小节").tokens);
   check("标题锚点在标题内部", /<h2[^>]*>\s*<a class="md-anchor"/.test(headingHtml), headingHtml);
+}
+
+console.log("[10] 资源库（字体 / 图片）");
+await testAssets();
+
+/** 构造一个只含 name 表的最小 TTF，用于验证字体元信息解析 */
+function buildTestFont(names: { id: number; text: string }[]): ArrayBuffer {
+  const encode = (s: string): number[] => {
+    const out: number[] = [];
+    for (const ch of s) {
+      const code = ch.charCodeAt(0);
+      out.push((code >> 8) & 0xff, code & 0xff);
+    }
+    return out;
+  };
+  const strings = names.map((n) => encode(n.text));
+  const stringOffset = 6 + names.length * 12;
+  const stringLen = strings.reduce((sum, s) => sum + s.length, 0);
+  const nameTableLen = stringOffset + stringLen;
+  const tableOffset = 28;
+  const buffer = new ArrayBuffer(tableOffset + nameTableLen);
+  const view = new DataView(buffer);
+
+  view.setUint32(0, 0x00010000);
+  view.setUint16(4, 1);
+  for (let i = 0; i < 4; i++) view.setUint8(12 + i, "name".charCodeAt(i));
+  view.setUint32(12 + 8, tableOffset);
+  view.setUint32(12 + 12, nameTableLen);
+
+  view.setUint16(tableOffset, 0);
+  view.setUint16(tableOffset + 2, names.length);
+  view.setUint16(tableOffset + 4, stringOffset);
+  let cursor = 0;
+  names.forEach((n, i) => {
+    const rec = tableOffset + 6 + i * 12;
+    view.setUint16(rec, 3);
+    view.setUint16(rec + 2, 1);
+    view.setUint16(rec + 4, 0x0409);
+    view.setUint16(rec + 6, n.id);
+    view.setUint16(rec + 8, strings[i].length);
+    view.setUint16(rec + 10, cursor);
+    cursor += strings[i].length;
+  });
+  let p = tableOffset + stringOffset;
+  for (const s of strings) for (const byte of s) view.setUint8(p++, byte);
+  return buffer;
+}
+
+async function testAssets(): Promise<void> {
+  // 字体栈工具
+  check("prependFamily 前置族名", prependFamily("My Font", "serif") === '"My Font", serif');
+  check("prependFamily 去重", prependFamily("My Font", '"My Font", serif') === '"My Font", serif');
+  check("removeFamily 移除", removeFamily("My Font", '"My Font", serif') === "serif");
+  check("removeFamily 不误删", removeFamily("Other", "serif") === "serif");
+  check("primaryFamily 取首项", primaryFamily('"My Font", serif') === "My Font");
+  check("primaryFamily 回退", primaryFamily("", "sans-serif") === "sans-serif");
+  check(
+    "stripKnownFamilies 清理自定义字体",
+    stripKnownFamilies('"A", "B", serif', [
+      { family: "A" } as FontAsset,
+      { family: "B" } as FontAsset,
+    ]) === "serif",
+  );
+
+  // 字体元信息解析（合成 TTF）
+  const ttf = buildTestFont([
+    { id: 1, text: "Test Font" },
+    { id: 2, text: "Bold Italic" },
+  ]);
+  const fontMeta = await parseFontMeta(ttf, "TestFont-BoldItalic.ttf");
+  check("解析字体族名", fontMeta.family === "Test Font", fontMeta.family);
+  check("解析字体字重", fontMeta.weight === 700, String(fontMeta.weight));
+  check("解析字体斜体", fontMeta.style === "italic", fontMeta.style);
+  const fallbackMeta = await parseFontMeta(new ArrayBuffer(8), "Weird_Font-Name.otf");
+  check("无法解析时回退文件名", fallbackMeta.family === "Weird Font Name", fallbackMeta.family);
+
+  const fontAsset: FontAsset = {
+    id: "f1",
+    kind: "font",
+    name: "MyFont.ttf",
+    family: "My Font",
+    weight: 400,
+    style: "normal",
+    format: "truetype",
+    mime: "font/ttf",
+    size: 1024,
+    dataUrl: "data:font/ttf;base64,AAAA",
+    createdAt: 1,
+  };
+  const fontCss = buildFontFaceCss([fontAsset], "block");
+  check("生成 @font-face", fontCss.includes("@font-face"));
+  check("@font-face 内联 data URL", fontCss.includes("url(\"data:font/ttf;base64,AAAA\")"));
+  check("@font-face 声明字重/字形", /font-weight:\s*400/.test(fontCss) && /font-style:\s*normal/.test(fontCss));
+
+  const withFonts = buildStandaloneHtml({
+    tokens,
+    meta,
+    bodyHtml: html,
+    flow: true,
+    forPrint: true,
+    fonts: [fontAsset],
+  });
+  check("单文件 HTML 内联字体", withFonts.includes('id="md-fonts"'));
+  check("单文件 HTML 含 @font-face", withFonts.includes("@font-face"));
+
+  // 图片引用解析
+  const tinyPng =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const imageAsset: ImageAsset = {
+    id: "img1",
+    kind: "image",
+    name: "pic",
+    filename: "pic.png",
+    mime: "image/png",
+    size: 100,
+    width: 1,
+    height: 1,
+    dataUrl: tinyPng,
+    createdAt: 1,
+  };
+  const assetMap: AssetMap = { f1: fontAsset, img1: imageAsset };
+  check("resolveAssetSrc 解析引用", resolveAssetSrc("asset://img1", assetMap) === tinyPng);
+  check("resolveAssetSrc 保留外链", resolveAssetSrc("https://x/y.png", assetMap) === "https://x/y.png");
+  check("resolveAssetSrc 缺失时占位", resolveAssetSrc("asset://nope", assetMap).startsWith("data:image/svg+xml"));
+
+  const assetParsed = parse("![图](asset://img1)");
+  assetParsed.env.assets = assetMap;
+  const assetHtml = renderTokens(assetParsed.tokens, assetParsed.env);
+  check("渲染时内联 data URL", assetHtml.includes(tinyPng));
+  check("渲染后不残留 asset://", !assetHtml.includes("asset://"));
+
+  // 导出层：带资源不抛错且能识别图片
+  const assetMd = "# 资源测试\n\n![图](asset://img1)\n";
+  const pptx = buildPptxPresentation(assetMd, tokens, meta, pptxOpts, assetMap);
+  check("PPTX 支持资源图片", pptx.slideCount >= 1, String(pptx.slideCount));
+  const docx = buildDocxDocument(assetMd, tokens, meta, docxOpts, assetMap);
+  check("DOCX 支持资源图片", docx.paragraphs >= 1, String(docx.paragraphs));
 }
 
 console.log("");

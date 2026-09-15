@@ -2,6 +2,7 @@ import PptxGenJS from "pptxgenjs";
 import type { Token } from "markdown-it";
 import { parse } from "./parser";
 import type { ExportMeta, PptxOptions, ThemeTokens } from "./types";
+import { primaryFamily, resolveAssetSrc, type AssetMap } from "./assets";
 import { safeFilename } from "./download";
 
 /* ── 中间表示 ─────────────────────────────────────────── */
@@ -66,7 +67,7 @@ function inlineImages(token: Token | undefined): { src: string; alt: string }[] 
 
 /* ── 结构切分：markdown → slides ─────────────────────── */
 
-function buildSlides(markdown: string, splitLevel: 1 | 2): Slide[] {
+function buildSlides(markdown: string, splitLevel: 1 | 2, assets?: AssetMap): Slide[] {
   const { tokens } = parse(markdown);
   const slides: Slide[] = [];
   let current: Slide | null = null;
@@ -147,7 +148,10 @@ function buildSlides(markdown: string, splitLevel: 1 | 2): Slide[] {
     }
 
     if (t.type === "inline") {
-      const imgs = inlineImages(t);
+      const imgs = inlineImages(t).map((img) => ({
+        src: resolveAssetSrc(img.src, assets),
+        alt: img.alt,
+      }));
       const text = inlineText(t);
       if (parent === "paragraph" || parent === "heading") {
         if (imgs.length && !text.replace(/图：.*/g, "").trim()) {
@@ -194,6 +198,7 @@ export function buildPptxPresentation(
   tokens: ThemeTokens,
   meta: ExportMeta,
   options: PptxOptions,
+  assets?: AssetMap,
 ): { pres: PptxGenJS; slideCount: number } {
   const pres = new PptxGenJS();
   pres.layout = options.slideSize === "4:3" ? "LAYOUT_4x3" : "LAYOUT_16x9";
@@ -210,8 +215,11 @@ export function buildPptxPresentation(
   const accent = hex(tokens.pptxAccent);
   const titleColor = hex(tokens.pptxTitleColor);
   const bodyColor = hex(tokens.pptxBodyColor);
+  // PPTX 只能写字体名，无法内嵌字体；取自定义字体栈的第一个族名
+  const bodyFont = primaryFamily(tokens.fontFamily, "Microsoft YaHei");
+  const codeFont = primaryFamily(tokens.codeFontFamily, "Consolas");
 
-  const slides = buildSlides(markdown, options.splitLevel);
+  const slides = buildSlides(markdown, options.splitLevel, assets);
   let produced = 0;
 
   const addBg = (slide: PptxGenJS.Slide): void => {
@@ -228,13 +236,13 @@ export function buildPptxPresentation(
     slide.addShape(pres.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.28, fill: { color: accent }, line: { color: accent } });
     slide.addText(title, {
       x: M, y: H / 2 - 1.4, w: CW, h: 1.5,
-      fontSize: 40, bold: true, color: titleColor, align: "left", valign: "bottom", fontFace: "Microsoft YaHei",
+      fontSize: 40, bold: true, color: titleColor, align: "left", valign: "bottom", fontFace: bodyFont,
     });
     slide.addShape(pres.ShapeType.rect, { x: M, y: H / 2 + 0.18, w: 1.6, h: 0.06, fill: { color: accent }, line: { color: accent } });
     if (subtitle) {
       slide.addText(subtitle, {
         x: M, y: H / 2 + 0.5, w: CW, h: 1,
-        fontSize: 16, color: bodyColor, align: "left", fontFace: "Microsoft YaHei",
+        fontSize: 16, color: bodyColor, align: "left", fontFace: bodyFont,
       });
     }
     produced++;
@@ -247,7 +255,7 @@ export function buildPptxPresentation(
       addAccentBar(slide, M, 0.5, 0.5);
       slide.addText(continuation ? `${title}（续）` : title, {
         x: M + 0.22, y: 0.38, w: CW - 0.3, h: 0.8,
-        fontSize: 26, bold: true, color: titleColor, valign: "middle", fontFace: "Microsoft YaHei",
+        fontSize: 26, bold: true, color: titleColor, valign: "middle", fontFace: bodyFont,
       });
       slide.addShape(pres.ShapeType.line, {
         x: M, y: 1.28, w: CW, h: 0, line: { color: "D8DEE9", width: 1 },
@@ -272,7 +280,7 @@ export function buildPptxPresentation(
       slide.addShape(pres.ShapeType.rect, { x: 0, y: 0, w: W, h: H, fill: { color: accent }, line: { color: accent } });
       slide.addText(s.title, {
         x: M, y: H / 2 - 0.8, w: CW, h: 1.6,
-        fontSize: 34, bold: true, color: "FFFFFF", align: "left", valign: "middle", fontFace: "Microsoft YaHei",
+        fontSize: 34, bold: true, color: "FFFFFF", align: "left", valign: "middle", fontFace: bodyFont,
       });
       produced++;
       continue;
@@ -296,7 +304,7 @@ export function buildPptxPresentation(
         })),
         {
           x: M + 0.1, y, w: CW - 0.2, h: Math.min(bottom - y, bulletBuffer.length * 0.45 + 0.3),
-          fontSize: 17, color: bodyColor, valign: "top", fontFace: "Microsoft YaHei",
+          fontSize: 17, color: bodyColor, valign: "top", fontFace: bodyFont,
           lineSpacingMultiple: 1.1,
         },
       );
@@ -321,12 +329,12 @@ export function buildPptxPresentation(
         if (b.sub) {
           slide.addText(b.text, {
             x: M + 0.1, y, w: CW - 0.2, h,
-            fontSize: 19, bold: true, color: accent, fontFace: "Microsoft YaHei", valign: "top",
+            fontSize: 19, bold: true, color: accent, fontFace: bodyFont, valign: "top",
           });
         } else {
           slide.addText(b.text, {
             x: M + 0.1, y, w: CW - 0.2, h,
-            fontSize: 16, color: bodyColor, fontFace: "Microsoft YaHei", valign: "top",
+            fontSize: 16, color: bodyColor, fontFace: bodyFont, valign: "top",
             lineSpacingMultiple: 1.2,
           });
         }
@@ -341,7 +349,7 @@ export function buildPptxPresentation(
         slide.addShape(pres.ShapeType.rect, { x: M + 0.1, y, w: 0.05, h, fill: { color: accent }, line: { color: accent } });
         slide.addText(b.text, {
           x: M + 0.35, y, w: CW - 0.45, h,
-          fontSize: 15, italic: true, color: bodyColor, valign: "top", fontFace: "Microsoft YaHei",
+          fontSize: 15, italic: true, color: bodyColor, valign: "top", fontFace: bodyFont,
         });
         y += h + 0.14;
       } else if (b.kind === "code" && options.codeAsTextBox) {
@@ -353,7 +361,7 @@ export function buildPptxPresentation(
         }
         slide.addText(b.text, {
           x: M, y, w: CW, h,
-          fontSize: 12, fontFace: "Consolas", color: hex(tokens.codeBlockColor),
+          fontSize: 12, fontFace: codeFont, color: hex(tokens.codeBlockColor),
           fill: { color: hex(tokens.codeBlockBg) }, valign: "top", breakLine: false,
           lineSpacingMultiple: 1.0,
         });
@@ -370,7 +378,7 @@ export function buildPptxPresentation(
               fill: { color: ri === 0 ? hex(tokens.tableHeaderBg) : bg },
               color: bodyColor,
               fontSize: 13,
-              fontFace: "Microsoft YaHei",
+              fontFace: bodyFont,
               valign: "middle" as const,
             },
           })),
@@ -420,8 +428,9 @@ export async function exportPptx(
   tokens: ThemeTokens,
   meta: ExportMeta,
   options: PptxOptions,
+  assets?: AssetMap,
 ): Promise<PptxResult> {
-  const { pres, slideCount } = buildPptxPresentation(markdown, tokens, meta, options);
+  const { pres, slideCount } = buildPptxPresentation(markdown, tokens, meta, options, assets);
   await pres.writeFile({ fileName: `${safeFilename(meta.title, "document")}.pptx` });
   return { slideCount };
 }

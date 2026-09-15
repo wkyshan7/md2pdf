@@ -1,4 +1,5 @@
 import type { ExportMeta, ThemeTokens } from "./types";
+import type { AssetMap, FontAsset } from "./assets";
 import { renderMarkdown } from "./render";
 import { buildStandaloneHtml } from "./document";
 
@@ -77,13 +78,22 @@ export interface PdfResult {
   mode: "print";
 }
 
+export interface PrintPdfOptions {
+  assets?: AssetMap;
+  fonts?: FontAsset[];
+}
+
 /** 生成打印文档并唤起打印对话框 */
 export async function exportPdf(
   markdown: string,
   tokens: ThemeTokens,
   meta: ExportMeta,
+  options: PrintPdfOptions = {},
 ): Promise<PdfResult> {
-  const { html } = renderMarkdown(markdown, { numbered: tokens.headingNumbered });
+  const { html } = renderMarkdown(markdown, {
+    numbered: tokens.headingNumbered,
+    assets: options.assets,
+  });
   const doc = buildStandaloneHtml({
     tokens,
     meta,
@@ -91,6 +101,7 @@ export async function exportPdf(
     flow: false,
     includeKatex: /\$[^$\n]+\$|\$\$/.test(markdown),
     forPrint: true,
+    fonts: options.fonts,
   });
   await printHtmlDocument(doc);
   return { mode: "print" };

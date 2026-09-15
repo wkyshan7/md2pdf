@@ -70,7 +70,32 @@ npm run icons      # 重新生成应用图标（需要 python3 + Pillow）
 
 主题可 **导出 / 导入 JSON**，方便团队统一规范。所有设置与文档自动存入 `localStorage`。
 
-### 3. 多格式导出
+### 3. 资源库：导入自己的字体与图片
+
+顶栏「🗂 资源库」按钮打开一个专门的管理面板，用来导入与维护自定义字体和图片。
+所有资源以 data URL 保存到 **IndexedDB**（不走 localStorage，不占文档配额），刷新后自动恢复。
+
+**字体**（TTF / OTF / WOFF / WOFF2）
+
+- 拖拽或点选导入，自动从字体二进制里读取**族名、字重、斜体**（TTF/OTF/WOFF），读不到时回退文件名；族名可在面板里修改。
+- 一键「设为正文」或「设为代码」：字体会插到对应字体栈最前面，实时生效；再点一次即可取消。
+- 面板内置可编辑的预览文本，导入即可看到实际字形。
+- 字体会以 `@font-face` + data URL 内联，因此：
+  - **预览**：`document` 中注入 `@font-face`，无需系统安装字体；
+  - **HTML 导出**：单文件内含字体，任何设备打开都一致；
+  - **PDF（位图 / 矢量打印）**：导出流程复用同一套字体，不会回退到默认字体；
+  - **PPTX / DOCX**：把自定义字体名写入字体设置（受格式限制，无法内嵌字体文件，打开端需安装同名字体）。
+
+**图片**（PNG / JPEG / GIF / WebP / SVG）
+
+- 面板以缩略图网格展示，显示尺寸与体积。
+- **插入引用**：在光标处写入 `![名称](asset://<id>)`，正文保持整洁；渲染与导出时自动替换为 data URL，四种导出格式全部自包含。
+- **插入内嵌**：直接写入 data URL，适合单独分享 Markdown 源文件。
+- 也可一键复制该图片的 Markdown，或删除。
+
+> 资源引用只存在于本机 IndexedDB，因此导出的 Markdown 源文件里若使用 `asset://`，在别处打开会显示占位图；需要自带图片的源文件请用「插入内嵌」，或直接分享导出的 HTML / PDF。
+
+### 4. 多格式导出
 
 | 格式 | 实现方式 | 说明 |
 | --- | --- | --- |
@@ -108,7 +133,7 @@ PDF 导出不依赖任何独立排版引擎，而是直接复用浏览器已经�
 另外，如果你直接在应用页面上按 `Ctrl/Cmd + P`，`app.css` 的打印规则会自动只输出预览页，
 隐藏顶栏、侧边编辑区、设置面板与状态栏，不再打印出被截断的分栏。
 
-### 4. 安装为应用（PWA）
+### 5. 安装为应用（PWA）
 
 项目内置 PWA 支持（`vite-plugin-pwa`），可以像原生应用一样安装到桌面或手机主屏，**并离线使用**：
 
@@ -152,7 +177,10 @@ src/
 ├─ core/
 │  ├─ types.ts            页面尺寸、ThemeTokens、导出选项等类型
 │  ├─ themes.ts           DEFAULT_TOKENS 与内置预设
-│  ├─ parser.ts           markdown-it 实例、插件、高亮、标题编号
+│  ├─ assets.ts           自定义资源类型、asset:// 引用解析、@font-face CSS
+│  ├─ assetStore.ts       资源持久化（IndexedDB，失败时退回内存）
+│  ├─ fontMeta.ts         从 TTF/OTF/WOFF 二进制读取族名 / 字重 / 斜体
+│  ├─ parser.ts           markdown-it 实例、插件、高亮、标题编号、图片引用解析
 │  ├─ render.ts           渲染 + DOMPurify 净化（HTML 安全）
 │  ├─ themeCss.ts         token → CSS 变量 + 基础排版 + @page 打印规则
 │  ├─ highlightThemes.ts  highlight.js 主题 CSS（?inline 静态导入）
@@ -168,6 +196,8 @@ src/
 ├─ ui/
 │  ├─ controls.tsx        表单控件（滑块 / 颜色 / 下拉 / 开关 …）
 │  ├─ SettingsPanel.tsx   设置面板
+│  ├─ AssetsPanel.tsx     资源库面板（导入 / 管理字体与图片）
+│  ├─ useAssets.ts         资源状态：导入、删除、重命名、IndexedDB 同步
 │  ├─ Preview.tsx         预览容器（页面 / 阅读、缩放）
 │  ├─ useScrollSync.ts    编辑器 ↔ 预览同步滚动
 │  ├─ useMediaQuery.ts    响应式断点
@@ -187,6 +217,9 @@ scripts/
 **设计要点**：主题只是一组 `ThemeTokens`，渲染层只消费 token，不关心具体预设。
 新增一套预设 = 在 `themes.ts` 里加一个 `{ id, name, tokens }` 对象，其余全部自动生效。
 
+资源层同理：`Asset` 统一描述字体与图片，`asset://<id>` 在解析阶段就替换为 data URL，
+因此下游的渲染与四种导出完全不需要知道资源是如何导入的。
+
 ---
 
 ## 已知限制
@@ -196,7 +229,11 @@ scripts/
 - **代码块换行**：为了保证长代码不被裁掉，写 PDF 时会强制代码块自动换行；
   若希望预览与 PDF 完全一致，请在「代码」分组里开启「代码自动换行」。
 - **PPTX 图片**：支持 data URL 与可跨域访问的图片 URL；本地相对路径图片无法在浏览器中读取，
-  建议直接粘贴为 data URL（PDF 导出会自动把可跨域的图片转成 data URL）。
+  建议用资源库「插入引用 / 插入内嵌」（PDF 导出会自动把可跨域的图片转成 data URL）。
+- **DOCX / PPTX 字体嵌入**：这两种格式的库不支持内嵌字体文件，只能写入字体名。
+  若把导出的文件发给未安装该字体的设备，会回退到系统字体；需要完全一致的视觉效果请用 PDF / HTML。
+- **资源持久化**：自定义资源保存在浏览器 IndexedDB 中，仅当前浏览器可见，不会随导出的文件同步；
+  隐私模式下退化为内存存储，刷新即丢失（面板会给出提示）。
 - **DOCX 数学公式**：以 LaTeX 源码形式呈现（Word 原生公式 OMML 暂未转换）。
 - **PPTX 版式**：采用「标题 + 内容」的通用版式自动排版，不做像素级模板还原。
 - 主包体积约 1.75 MB（gzip 564 KB），主要来自 `docx` / `pptxgenjs` / KaTeX / highlight.js；

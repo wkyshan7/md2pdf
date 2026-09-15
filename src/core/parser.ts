@@ -6,6 +6,7 @@ import footnote from "markdown-it-footnote";
 import taskLists from "markdown-it-task-lists";
 import katex from "@vscode/markdown-it-katex";
 import hljs from "highlight.js/lib/common";
+import { resolveAssetSrc, type AssetMap } from "./assets";
 
 export function escapeHtml(s: string): string {
   return s
@@ -66,6 +67,23 @@ export const md: MarkdownItInstance = new MarkdownIt({
     permalink: anchor.permalink.linkInsideHeader({ symbol: "#", placement: "before", class: "md-anchor" }),
   })
   .use(asPlugin(katex), { throwOnError: false, errorColor: "#cc0000" });
+
+/**
+ * 图片渲染：把 `asset://<id>` 引用解析成真实 data URL。
+ * 必须在净化（DOMPurify）之前完成——DOMPurify 默认会丢弃未知协议的图片地址。
+ */
+const defaultImageRule = md.renderer.rules.image;
+md.renderer.rules.image = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const srcIndex = token.attrIndex("src");
+  if (srcIndex >= 0 && token.attrs) {
+    const assets = (env as { assets?: AssetMap }).assets;
+    token.attrs[srcIndex][1] = resolveAssetSrc(String(token.attrs[srcIndex][1]), assets);
+  }
+  if (defaultImageRule) return defaultImageRule(tokens, idx, options, env, self);
+  token.attrSet("alt", self.renderInlineAsText(token.children ?? [], options, env));
+  return self.renderToken(tokens, idx, options);
+};
 
 export interface Heading {
   level: number;
