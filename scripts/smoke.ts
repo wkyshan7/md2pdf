@@ -18,7 +18,7 @@ import {
   toUserThemeId,
 } from "../src/core/userThemes";
 import { buildStandaloneHtml } from "../src/core/document";
-import { buildPrintCss, BASE_CSS } from "../src/core/themeCss";
+import { buildPrintCss, BASE_CSS, buildThemeStyle, buildVars } from "../src/core/themeCss";
 import { resolveTokens, THEME_PRESETS } from "../src/core/themes";
 import { SAMPLE_MARKDOWN } from "../src/core/sample";
 import { buildPptxPresentation } from "../src/core/exportPptx";
@@ -629,6 +629,49 @@ function testBundleAndThemes(): void {
   check("用户主题 id 往返", fromUserThemeId(toUserThemeId("abc")) === "abc");
   check("识别用户主题 id", isUserThemeId(toUserThemeId("abc")) && !isUserThemeId("academic"));
   check("新主题 id 唯一", newUserThemeId() !== newUserThemeId());
+}
+
+console.log("[13] 列表行距 / 缩进与版心约束");
+testListLayout();
+
+function testListLayout(): void {
+  const t = resolveTokens(THEME_PRESETS[0]);
+  const vars = buildVars(t);
+  check("CSS 变量含列表缩进", /--md-list-indent:\s*1\.7em/.test(vars));
+  check(
+    "基础样式用变量控制缩进",
+    /:where\(ul, ol\)\s*{[^}]*padding-left:\s*var\(--md-list-indent\)/.test(BASE_CSS),
+  );
+  check("基础样式不再写死缩进", !/padding-left:\s*1\.7em/.test(BASE_CSS));
+  check("列表项允许任意断行", /\.md-body li\s*{[^}]*overflow-wrap:\s*anywhere/.test(BASE_CSS));
+  check("列表有 max-width 保护", /:where\(ul, ol\)\s*{[^}]*max-width:\s*100%/.test(BASE_CSS));
+
+  const auto = buildThemeStyle({ ...t, listAutoFit: true }, ":root");
+  check(
+    "自动收缩：深层缩进递减",
+    auto.includes("min(var(--md-list-indent), 1.5em)") && auto.includes("min(var(--md-list-indent), 1em)"),
+  );
+  check("自动收缩：约束列表内块级元素", /\.md-body li :where\(pre, table, blockquote/.test(auto));
+  check("自动收缩：含运行时兜底类", auto.includes(".md-list-tight"));
+  const off = buildThemeStyle({ ...t, listAutoFit: false }, ":root");
+  check("关闭时不输出收缩规则", !off.includes("min(var(--md-list-indent), 1.5em)"));
+  check("关闭时仍保留缩进变量", off.includes("padding-left: var(--md-list-indent)"));
+
+  const line = buildThemeStyle({ ...t, listLineHeight: 1.4 }, ":root");
+  check("列表行距写入 CSS", /\.md-body li\s*{\s*line-height:\s*1\.4/.test(line));
+  const noLine = buildThemeStyle({ ...t, listLineHeight: 0 }, ":root");
+  check("行距为 0 时不覆盖正文行高", !/\.md-body li\s*{\s*line-height/.test(noLine));
+
+  const printCss = buildPrintCss({ tokens: t });
+  check("打印时列表不超出版心", /:where\(ul, ol\)\s*{[^}]*max-width:\s*100%/.test(printCss));
+
+  const docxList = buildDocxDocument(
+    "- 一级\n  - 二级\n    - 三级\n      - 四级\n        - 五级\n",
+    { ...t, listIndent: 2, listLineHeight: 1.5 },
+    meta,
+    { ...docxOpts, headingNumbered: false },
+  );
+  check("DOCX 深层列表不报错", docxList.paragraphs >= 1, String(docxList.paragraphs));
 }
 
 console.log("");

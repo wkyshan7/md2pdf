@@ -264,6 +264,35 @@ export function SettingsPanel(props: SettingsPanelProps) {
         )}
       </Section>
 
+      <Section title="列表">
+        <Slider
+          label="列表行距"
+          value={t.listLineHeight}
+          min={0}
+          max={2.6}
+          step={0.05}
+          onChange={(v) => patch({ listLineHeight: v })}
+        />
+        <Slider
+          label="列表缩进（列距）"
+          value={t.listIndent}
+          min={0.6}
+          max={3}
+          step={0.05}
+          unit="em"
+          onChange={(v) => patch({ listIndent: v })}
+        />
+        <Toggle
+          label="自动收缩，不超出版心"
+          checked={t.listAutoFit}
+          onChange={(v) => patch({ listAutoFit: v })}
+        />
+        <div className="hint">
+          列表行距为 0 时跟随正文。开启自动收缩后，嵌套层级越深缩进越小，
+          列表内的代码块 / 表格 / 图片也会限制在版心内；若仍溢出，会在渲染时自动进一步收紧。
+        </div>
+      </Section>
+
       <Section title="代码">
         <Select
           label="高亮主题"

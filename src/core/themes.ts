@@ -32,6 +32,10 @@ export const DEFAULT_TOKENS: ThemeTokens = {
   paraSpacing: 0.8,
   maxWidth: 820,
 
+  listLineHeight: 0,
+  listIndent: 1.7,
+  listAutoFit: true,
+
   codeFontFamily:
     '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, Consolas, "Courier New", monospace',
   codeFontSize: 14,

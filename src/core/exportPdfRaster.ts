@@ -1,6 +1,7 @@
 import type { ExportMeta, RasterPdfOptions, ThemeTokens } from "./types";
 import { PAGE_SIZES } from "./types";
 import { mmToPx, waitForAssets } from "./dom";
+import { fitOverflowingLists, fitPageOverflow } from "./listFit";
 import { safeFilename } from "./download";
 
 /**
@@ -289,11 +290,15 @@ function preparePages(sourcePage: HTMLElement, tokens: ThemeTokens): PreparedPag
     pre.appendChild(span);
   });
 
-  // 2. 分页
+  // 2. 列表 / 内容溢出兜底：按纸张版心宽度重新实测一次
+  fitOverflowingLists(measureBody);
+  fitPageOverflow(measurePage);
+
+  // 3. 分页
   const groups = paginate(measureBody, contentH);
   measurePage.remove();
 
-  // 3. 生成每页 DOM
+  // 4. 生成每页 DOM
   const strips: HTMLElement[] = groups.map((nodes) => {
     const strip = document.createElement("div");
     strip.className = "md-page md-print-page";

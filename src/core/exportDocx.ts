@@ -226,10 +226,11 @@ function listParagraph(
   ordered: boolean,
   level: number,
 ): Paragraph {
+  const lineHeight = ctx.tokens.listLineHeight > 0 ? ctx.tokens.listLineHeight : ctx.tokens.lineHeight;
   return new Paragraph({
     children: inlineRuns(inline, ctx.tokens, ctx.assets),
     numbering: { reference: ordered ? "md-ordered" : "md-bullet", level: Math.min(level, 4) },
-    spacing: { after: 60, line: Math.round(ctx.tokens.lineHeight * 240) },
+    spacing: { after: 60, line: Math.round(lineHeight * 240) },
   });
 }
 
@@ -490,6 +491,10 @@ export function buildDocxDocument(
   }
   children.push(...body);
 
+  // 列表缩进跟随主题（1em ≈ fontSize px），避免深层列表占满版面
+  const listStep = Math.max(160, Math.round(tokens.listIndent * tokens.fontSize * 15));
+  const listHanging = Math.round(listStep * 0.72);
+
   const dims = PAGE_SIZES[tokens.pageSize];
   const [w, h] = tokens.orientation === "landscape" ? [dims.h, dims.w] : [dims.w, dims.h];
 
@@ -524,7 +529,7 @@ export function buildDocxDocument(
             format: LevelFormat.BULLET,
             text: ["•", "◦", "▪"][level % 3],
             alignment: AlignmentType.LEFT,
-            style: { paragraph: { indent: { left: 360 + level * 360, hanging: 260 } } },
+            style: { paragraph: { indent: { left: listStep * (level + 1), hanging: listHanging } } },
           })),
         },
         {
@@ -534,7 +539,7 @@ export function buildDocxDocument(
             format: LevelFormat.DECIMAL,
             text: `%${level + 1}.`,
             alignment: AlignmentType.LEFT,
-            style: { paragraph: { indent: { left: 360 + level * 360, hanging: 260 } } },
+            style: { paragraph: { indent: { left: listStep * (level + 1), hanging: listHanging } } },
           })),
         },
       ],

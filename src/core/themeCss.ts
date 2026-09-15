@@ -39,6 +39,7 @@ export function buildVars(t: ThemeTokens): string {
 --md-heading-align: ${t.headingAlign};
 --md-para-spacing: ${t.paraSpacing}em;
 --md-max-width: ${t.maxWidth}px;
+--md-list-indent: ${t.listIndent}em;
 --md-code-font: ${t.codeFontFamily};
 --md-code-size: ${t.codeFontSize}px;
 --md-inline-code-bg: ${t.inlineCodeBg};
@@ -127,8 +128,19 @@ export const BASE_CSS = `
 .md-body h1:hover .md-anchor, .md-body h2:hover .md-anchor, .md-body h3:hover .md-anchor,
 .md-body h4:hover .md-anchor, .md-body h5:hover .md-anchor, .md-body h6:hover .md-anchor { opacity: 0.55; }
 
-.md-body ul, .md-body ol { margin: 0 0 var(--md-para-spacing); padding-left: 1.7em; }
-.md-body li { margin: 0.25em 0; }
+.md-body :where(ul, ol) {
+  margin: 0 0 var(--md-para-spacing);
+  padding-left: var(--md-list-indent);
+  /* 列表永远不得超出左右版心 */
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.md-body li {
+  margin: 0.25em 0;
+  /* min-width:0 让 flex/grid 子项能收缩；长词在任意位置断行 */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .md-body li > ul, .md-body li > ol { margin: 0.25em 0; }
 /* 任务清单：复选框挂在 marker 区域（与普通列表的圆点同位置），
    绝不能使用负的 li 外边距，否则会跑到版心左侧外面。
@@ -285,6 +297,13 @@ export function buildPrintCss({ tokens: t }: PrintCssOptions): string {
   }
   .md-body table { width: 100% !important; max-width: 100% !important; }
   .md-body th, .md-body td { overflow-wrap: anywhere; word-break: break-word; }
+  /* 列表不得超出左右版心：深层缩进自动收窄，块级内容强制换行 */
+  .md-body :where(ul, ol) { max-width: 100% !important; box-sizing: border-box; }
+  .md-body li { overflow-wrap: anywhere; }
+  .md-body li pre.md-code-block,
+  .md-body li table,
+  .md-body li blockquote,
+  .md-body li img { max-width: 100% !important; }
   .md-body img, .md-body figure, .md-body svg { max-width: 100% !important; }
   .md-body .katex-display { max-width: 100% !important; }
 
@@ -316,6 +335,25 @@ export function buildThemeStyle(t: ThemeTokens, scope = ":root"): string {
   if (t.tableStripe)
     extras.push(
       ".md-body tbody tr:nth-child(even) { background: var(--md-stripe); }",
+    );
+  if (t.listLineHeight > 0)
+    extras.push(`.md-body li { line-height: ${t.listLineHeight}; }`);
+  if (t.listAutoFit)
+    extras.push(
+      /* 逐级缩小缩进：列表越深、缩进越小，避免把内容挤出右侧版心 */
+      ".md-body :where(ul, ol) :where(ul, ol) { padding-left: min(var(--md-list-indent), 1.5em); }",
+      ".md-body :where(ul, ol) :where(ul, ol) :where(ul, ol) { padding-left: min(var(--md-list-indent), 1.25em); }",
+      ".md-body :where(ul, ol) :where(ul, ol) :where(ul, ol) :where(ul, ol) { padding-left: min(var(--md-list-indent), 1em); }",
+      ".md-body :where(ul, ol) :where(ul, ol) :where(ul, ol) :where(ul, ol) :where(ul, ol) { padding-left: min(var(--md-list-indent), 0.85em); }",
+      /* 列表内部的块级元素不能超出版心 */
+      ".md-body li :where(pre, table, blockquote, figure, img, svg, .katex-display) { max-width: 100%; box-sizing: border-box; }",
+      ".md-body li pre.md-code-block { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; }",
+      /* 运行时兜底：脚本检测到仍然溢出的列表会加上这个 class */
+      ".md-body .md-list-tight { padding-left: 0.9em; }",
+      ".md-body .md-list-tight :where(ul, ol) { padding-left: 0.9em; }",
+      ".md-body .md-list-tight pre.md-code-block { white-space: pre-wrap; overflow-x: hidden; }",
+      ".md-body.md-overflow-compact { overflow-wrap: anywhere; }",
+      ".md-body.md-overflow-compact :where(pre, table) { max-width: 100%; box-sizing: border-box; }",
     );
   return `${scope} {\n${buildVars(t)}\n}\n${BASE_CSS}\n${extras.join("\n")}\n${buildPrintCss({
     tokens: t,

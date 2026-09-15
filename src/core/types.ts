@@ -50,6 +50,11 @@ export interface ThemeTokens {
   paraSpacing: number; // 段间距（em）
   maxWidth: number; // px，仅屏幕/HTML 阅读模式
 
+  /* ── 列表 ───────────────────────────── */
+  listLineHeight: number; // 列表行距；0 = 跟随正文行高
+  listIndent: number; // 列表缩进（em），控制列表标记与正文的“列距”
+  listAutoFit: boolean; // 自动收缩深层缩进并换行，确保不超出左右版心
+
   /* ── 代码 ───────────────────────────── */
   codeFontFamily: string;
   codeFontSize: number; // px
