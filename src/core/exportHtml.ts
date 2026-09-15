@@ -20,6 +20,7 @@ export function buildHtmlDocument(
 ): string {
   const { html } = renderMarkdown(markdown, {
     numbered: options.numbered ?? tokens.headingNumbered,
+    numberMaxLevel: tokens.headingNumberMaxLevel,
     assets: options.assets,
   });
   return buildStandaloneHtml({

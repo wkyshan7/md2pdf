@@ -43,7 +43,8 @@ export interface ThemeTokens {
   headingAlign: "left" | "center";
   h1Rule: boolean; // H1 下划线
   h2Rule: boolean;
-  headingNumbered: boolean; // 预览/导出时给 H1/H2 自动编号
+  headingNumbered: boolean; // 预览/导出时自动给标题编号（1 / 1.2 / 1.2.2）
+  headingNumberMaxLevel: number; // 编号到第几级标题（1–6）
 
   /* ── 段落与版心 ─────────────────────── */
   paraSpacing: number; // 段间距（em）

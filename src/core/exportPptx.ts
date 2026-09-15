@@ -3,6 +3,7 @@ import type { Token } from "markdown-it";
 import { parse } from "./parser";
 import type { ExportMeta, PptxOptions, ThemeTokens } from "./types";
 import { primaryFamily, resolveAssetSrc, type AssetMap } from "./assets";
+import { HeadingNumberer } from "./headingNumbers";
 import { safeFilename } from "./download";
 
 /* ── 中间表示 ─────────────────────────────────────────── */
@@ -17,6 +18,8 @@ type Block =
 
 interface Slide {
   title: string;
+  /** 标题序号（1 / 1.2 / 1.2.2），未启用编号时为 undefined */
+  number?: string;
   kind: "title" | "section" | "content";
   blocks: Block[];
 }
@@ -67,12 +70,18 @@ function inlineImages(token: Token | undefined): { src: string; alt: string }[] 
 
 /* ── 结构切分：markdown → slides ─────────────────────── */
 
-function buildSlides(markdown: string, splitLevel: 1 | 2, assets?: AssetMap): Slide[] {
+function buildSlides(
+  markdown: string,
+  splitLevel: 1 | 2,
+  numbering: { enabled: boolean; maxLevel: number },
+  assets?: AssetMap,
+): Slide[] {
   const { tokens } = parse(markdown);
   const slides: Slide[] = [];
   let current: Slide | null = null;
   const ctx: string[] = [];
   const listStack: { ordered: boolean; index: number }[] = [];
+  const numberer = new HeadingNumberer(numbering.maxLevel);
   let pendingFirstHeading = true;
 
   const ensure = (): Slide => {
@@ -83,9 +92,9 @@ function buildSlides(markdown: string, splitLevel: 1 | 2, assets?: AssetMap): Sl
     return current;
   };
 
-  const startSlide = (title: string, kind: Slide["kind"]): void => {
+  const startSlide = (title: string, kind: Slide["kind"], number?: string): void => {
     const isFirst = pendingFirstHeading && slides.length === 0;
-    current = { title, kind: kind === "title" || !isFirst ? kind : "title", blocks: [] };
+    current = { title, number, kind: kind === "title" || !isFirst ? kind : "title", blocks: [] };
     slides.push(current);
     pendingFirstHeading = false;
   };
@@ -97,10 +106,11 @@ function buildSlides(markdown: string, splitLevel: 1 | 2, assets?: AssetMap): Sl
     if (t.type === "heading_open") {
       const level = Number(t.tag.slice(1));
       const text = inlineText(tokens[i + 1]);
+      const number = numbering.enabled ? numberer.next(level) : null;
       if (level <= splitLevel) {
-        startSlide(text, level === 1 ? "section" : "content");
+        startSlide(text, level === 1 ? "section" : "content", number ?? undefined);
       } else {
-        ensure().blocks.push({ kind: "paragraph", text, sub: true });
+        ensure().blocks.push({ kind: "paragraph", text: number ? `${number} ${text}` : text, sub: true });
       }
       continue;
     }
@@ -219,7 +229,10 @@ export function buildPptxPresentation(
   const bodyFont = primaryFamily(tokens.fontFamily, "Microsoft YaHei");
   const codeFont = primaryFamily(tokens.codeFontFamily, "Consolas");
 
-  const slides = buildSlides(markdown, options.splitLevel, assets);
+  const slides = buildSlides(markdown, options.splitLevel, {
+    enabled: tokens.headingNumbered,
+    maxLevel: tokens.headingNumberMaxLevel,
+  }, assets);
   let produced = 0;
 
   const addBg = (slide: PptxGenJS.Slide): void => {
@@ -269,16 +282,17 @@ export function buildPptxPresentation(
   const bottom = H - 0.55;
 
   for (const s of slides) {
+    const slideTitle = s.number ? `${s.number} ${s.title}` : s.title;
     if (s.kind === "title") {
       const first = s.blocks.find((b) => b.kind === "paragraph");
-      titleSlide(s.title, first && first.kind === "paragraph" ? first.text : meta.author);
+      titleSlide(slideTitle, first && first.kind === "paragraph" ? first.text : meta.author);
       continue;
     }
     if (s.kind === "section" && options.includeTitleSlide) {
       const slide = pres.addSlide();
       addBg(slide);
       slide.addShape(pres.ShapeType.rect, { x: 0, y: 0, w: W, h: H, fill: { color: accent }, line: { color: accent } });
-      slide.addText(s.title, {
+      slide.addText(slideTitle, {
         x: M, y: H / 2 - 0.8, w: CW, h: 1.6,
         fontSize: 34, bold: true, color: "FFFFFF", align: "left", valign: "middle", fontFace: bodyFont,
       });
@@ -287,14 +301,14 @@ export function buildPptxPresentation(
     }
 
     // 内容幻灯片：按 bulletsPerSlide 自动分页
-    let slide = contentSlide(s.title, false);
+    let slide = contentSlide(slideTitle, false);
     let y = yTop;
     let bulletBuffer: { text: string; level: number; ordered: boolean }[] = [];
 
     const flushBullets = (): void => {
       if (!bulletBuffer.length) return;
       if (y + bulletBuffer.length * 0.42 > bottom) {
-        slide = contentSlide(s.title, true);
+        slide = contentSlide(slideTitle, true);
         y = yTop;
       }
       slide.addText(
@@ -323,7 +337,7 @@ export function buildPptxPresentation(
       if (b.kind === "paragraph") {
         const h = b.sub ? 0.5 : Math.max(0.4, Math.ceil(b.text.length / 60) * 0.36 + 0.2);
         if (y + h > bottom) {
-          slide = contentSlide(s.title, true);
+          slide = contentSlide(slideTitle, true);
           y = yTop;
         }
         if (b.sub) {
@@ -343,7 +357,7 @@ export function buildPptxPresentation(
         const lines = b.text.split("\n").length;
         const h = Math.max(0.5, lines * 0.4 + 0.3);
         if (y + h > bottom) {
-          slide = contentSlide(s.title, true);
+          slide = contentSlide(slideTitle, true);
           y = yTop;
         }
         slide.addShape(pres.ShapeType.rect, { x: M + 0.1, y, w: 0.05, h, fill: { color: accent }, line: { color: accent } });
@@ -356,7 +370,7 @@ export function buildPptxPresentation(
         const lines = b.text.split("\n").length;
         const h = Math.min(bottom - y, Math.max(0.6, lines * 0.24 + 0.3));
         if (y + h > bottom) {
-          slide = contentSlide(s.title, true);
+          slide = contentSlide(slideTitle, true);
           y = yTop;
         }
         slide.addText(b.text, {
@@ -385,7 +399,7 @@ export function buildPptxPresentation(
         );
         const h = Math.min(bottom - y, (b.rows.length + 1) * 0.4);
         if (y + h > bottom) {
-          slide = contentSlide(s.title, true);
+          slide = contentSlide(slideTitle, true);
           y = yTop;
         }
         slide.addTable(rows, {
@@ -398,7 +412,7 @@ export function buildPptxPresentation(
         const h = Math.min(bottom - y, 3.4);
         const w = CW;
         if (y + h > bottom) {
-          slide = contentSlide(s.title, true);
+          slide = contentSlide(slideTitle, true);
           y = yTop;
         }
         try {

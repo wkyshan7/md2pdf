@@ -31,6 +31,8 @@ import { useMediaQuery } from "./ui/useMediaQuery";
 import { usePwaInstall } from "./ui/usePwaInstall";
 
 const STORAGE_KEY = "md-studio:v1";
+/** 状态结构版本：用于一次性迁移默认值 */
+const STORAGE_VERSION = 2;
 
 interface PersistedState {
   markdown: string;
@@ -45,6 +47,8 @@ interface PersistedState {
   pdf: RasterPdfOptions;
   editorW: number;
   panelW: number;
+  /** 状态结构版本，用于一次性迁移默认值 */
+  version?: number;
   /** 当前启用为正文 / 代码的自定义字体 id（字体本体存在 IndexedDB） */
   bodyFontId?: string;
   codeFontId?: string;
@@ -76,7 +80,7 @@ const DEFAULT_PPTX: PptxOptions = {
 
 const DEFAULT_DOCX: DocxOptions = {
   includeToc: false,
-  headingNumbered: false,
+  headingNumbered: true,
   codeShading: true,
 };
 
@@ -100,6 +104,7 @@ const INITIAL_STATE: PersistedState = {
   pdf: DEFAULT_PDF,
   editorW: DEFAULT_EDITOR_W,
   panelW: DEFAULT_PANEL_W,
+  version: STORAGE_VERSION,
 };
 
 function loadState(): PersistedState {
@@ -107,10 +112,17 @@ function loadState(): PersistedState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return INITIAL_STATE;
     const parsed = JSON.parse(raw) as Partial<PersistedState>;
+    const tokens: ThemeTokens = { ...DEFAULT_TOKENS, ...(parsed.tokens ?? {}) };
+    // v1 → v2：标题自动编号改为默认开启，并补上编号层级默认值
+    if ((parsed.version ?? 1) < 2) {
+      tokens.headingNumbered = true;
+      tokens.headingNumberMaxLevel = tokens.headingNumberMaxLevel ?? 6;
+    }
     return {
       ...INITIAL_STATE,
       ...parsed,
-      tokens: { ...DEFAULT_TOKENS, ...(parsed.tokens ?? {}) },
+      version: STORAGE_VERSION,
+      tokens,
       meta: { ...DEFAULT_META, ...(parsed.meta ?? {}) },
       pptx: { ...DEFAULT_PPTX, ...(parsed.pptx ?? {}) },
       docx: { ...DEFAULT_DOCX, ...(parsed.docx ?? {}) },
@@ -391,8 +403,13 @@ export default function App() {
   /* 预览：延迟渲染，避免大文档卡顿 */
   const deferredMarkdown = useDeferredValue(markdown);
   const rendered = useMemo(
-    () => renderMarkdown(deferredMarkdown, { numbered: tokens.headingNumbered, assets: assets.map }),
-    [deferredMarkdown, tokens.headingNumbered, assets.map],
+    () =>
+      renderMarkdown(deferredMarkdown, {
+        numbered: tokens.headingNumbered,
+        numberMaxLevel: tokens.headingNumberMaxLevel,
+        assets: assets.map,
+      }),
+    [deferredMarkdown, tokens.headingNumbered, tokens.headingNumberMaxLevel, assets.map],
   );
   const themeStyle = useMemo(() => buildThemeStyle(tokens, ":root"), [tokens]);
   const fontFacesCss = useMemo(() => buildFontFaceCss(assets.fonts, "swap"), [assets.fonts]);

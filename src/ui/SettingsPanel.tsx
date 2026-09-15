@@ -203,6 +203,14 @@ export function SettingsPanel(props: SettingsPanelProps) {
         <Toggle label="H1 下划线" checked={t.h1Rule} onChange={(v) => patch({ h1Rule: v })} />
         <Toggle label="H2 下划线" checked={t.h2Rule} onChange={(v) => patch({ h2Rule: v })} />
         <Toggle label="标题自动编号" checked={t.headingNumbered} onChange={(v) => patch({ headingNumbered: v })} />
+        {t.headingNumbered && (
+          <Select
+            label="编号到第几级"
+            value={String(t.headingNumberMaxLevel)}
+            onChange={(v) => patch({ headingNumberMaxLevel: Number(v) })}
+            options={[1, 2, 3, 4, 5, 6].map((n) => ({ value: String(n), label: `H1–H${n}` }))}
+          />
+        )}
       </Section>
 
       <Section title="代码">

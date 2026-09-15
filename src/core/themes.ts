@@ -26,7 +26,8 @@ export const DEFAULT_TOKENS: ThemeTokens = {
   headingAlign: "left",
   h1Rule: true,
   h2Rule: false,
-  headingNumbered: false,
+  headingNumbered: true,
+  headingNumberMaxLevel: 6,
 
   paraSpacing: 0.8,
   maxWidth: 820,

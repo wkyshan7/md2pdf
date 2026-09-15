@@ -92,6 +92,7 @@ export async function exportPdf(
 ): Promise<PdfResult> {
   const { html } = renderMarkdown(markdown, {
     numbered: tokens.headingNumbered,
+    numberMaxLevel: tokens.headingNumberMaxLevel,
     assets: options.assets,
   });
   const doc = buildStandaloneHtml({

@@ -30,6 +30,7 @@ import type { Token } from "markdown-it";
 import { parse } from "./parser";
 import { PAGE_SIZES, type DocxOptions, type ExportMeta, type ThemeTokens } from "./types";
 import { primaryFamily, resolveAssetSrc, type AssetMap } from "./assets";
+import { HeadingNumberer } from "./headingNumbers";
 import { downloadBlob, safeFilename } from "./download";
 
 /** 取代码字体栈第一个族名，用于 docx 的 run 字体 */
@@ -186,7 +187,7 @@ function inlineRuns(inline: Token | undefined, tokens: ThemeTokens, assets?: Ass
 
 interface WalkContext {
   tokens: ThemeTokens;
-  counters: number[];
+  numberer: HeadingNumberer;
   numbered: boolean;
   codeShading: boolean;
   assets?: AssetMap;
@@ -256,9 +257,8 @@ function walk(tokens: Token[], ctx: WalkContext): (Paragraph | Table)[] {
       const inline = tokens[i + 1];
       let prefix = "";
       if (ctx.numbered) {
-        ctx.counters[level - 1] += 1;
-        for (let j = level; j < 6; j++) ctx.counters[j] = 0;
-        prefix = `${ctx.counters.slice(0, level).join(".")} `;
+        const number = ctx.numberer.next(level);
+        if (number) prefix = `${number} `;
       }
       const runs = inlineRuns(inline, ctx.tokens, ctx.assets);
       if (prefix) runs.unshift(new TextRun({ text: prefix, color: hex(ctx.tokens.accentColor) }));
@@ -474,7 +474,7 @@ export function buildDocxDocument(
   const { tokens: mdTokens } = parse(markdown);
   const ctx: WalkContext = {
     tokens,
-    counters: [0, 0, 0, 0, 0, 0],
+    numberer: new HeadingNumberer(tokens.headingNumberMaxLevel),
     numbered: options.headingNumbered,
     codeShading: options.codeShading,
     assets,

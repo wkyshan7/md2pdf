@@ -4,6 +4,7 @@
  */
 import { Document, Packer } from "docx";
 import { parse, renderTokens, withHeadingNumbers } from "../src/core/parser";
+import { computeHeadingNumbers } from "../src/core/headingNumbers";
 import { buildStandaloneHtml } from "../src/core/document";
 import { buildPrintCss, BASE_CSS } from "../src/core/themeCss";
 import { resolveTokens, THEME_PRESETS } from "../src/core/themes";
@@ -515,6 +516,45 @@ async function testAssets(): Promise<void> {
   check("PPTX 支持资源图片", pptx.slideCount >= 1, String(pptx.slideCount));
   const docx = buildDocxDocument(assetMd, tokens, meta, docxOpts, assetMap);
   check("DOCX 支持资源图片", docx.paragraphs >= 1, String(docx.paragraphs));
+}
+
+console.log("[11] 标题自动编号（1 / 1.2 / 1.2.2）");
+testHeadingNumbers();
+
+function testHeadingNumbers(): void {
+  const nums = computeHeadingNumbers([1, 2, 3, 2, 3, 1, 2]);
+  check(
+    "多级序号为 1/1.1/1.1.1/1.2/1.2.1/2/2.1",
+    nums.join(",") === "1,1.1,1.1.1,1.2,1.2.1,2,2.1",
+    nums.join(","),
+  );
+  check("跳级时补零", computeHeadingNumbers([1, 4]).join(",") === "1,1.0.0.1", computeHeadingNumbers([1, 4]).join(","));
+  check(
+    "限制编号层级",
+    computeHeadingNumbers([1, 2, 3, 4], 2).join(",") === "1,1.1,,",
+    computeHeadingNumbers([1, 2, 3, 4], 2).join(","),
+  );
+  check("同级计数器递增", computeHeadingNumbers([1, 1]).join(",") === "1,2");
+
+  const seq = renderTokens(withHeadingNumbers(parse("# A\n## B\n### C\n## D").tokens));
+  check("渲染包含序号 span", seq.includes('class="md-secnum"'));
+  check("三级序号 1.1.1", seq.includes("1.1.1 </span>"), seq.slice(0, 260));
+  check("同级递增 1.2", seq.includes("1.2 </span>"), seq.slice(0, 260));
+
+  const limited = renderTokens(withHeadingNumbers(parse("# A\n## B\n### C").tokens, 2));
+  const count = (limited.match(/md-secnum/g) ?? []).length;
+  check("限制层级时只编号 H1/H2", count === 2, String(count));
+  check("被限制的 H3 不编号", !limited.includes("1.1.1"));
+
+  const defaultTokens = resolveTokens(THEME_PRESETS[0]);
+  check("标题编号默认开启", defaultTokens.headingNumbered === true);
+  check("默认编号到 H6", defaultTokens.headingNumberMaxLevel === 6, String(defaultTokens.headingNumberMaxLevel));
+
+  const docxNumbered = buildDocxDocument("# A\n\n## B\n", defaultTokens, meta, {
+    ...docxOpts,
+    headingNumbered: true,
+  });
+  check("DOCX 开启标题编号不报错", docxNumbered.paragraphs >= 2, String(docxNumbered.paragraphs));
 }
 
 console.log("");

@@ -7,6 +7,7 @@ import taskLists from "markdown-it-task-lists";
 import katex from "@vscode/markdown-it-katex";
 import hljs from "highlight.js/lib/common";
 import { resolveAssetSrc, type AssetMap } from "./assets";
+import { HeadingNumberer } from "./headingNumbers";
 
 export function escapeHtml(s: string): string {
   return s
@@ -127,17 +128,18 @@ export function renderTokens(tokens: Token[], env: Record<string, unknown> = {})
   return md.renderer.render(tokens, md.options, env);
 }
 
-/** 给标题插入自动编号（复制 inline token 后写入序号，不改动原始数组） */
-export function withHeadingNumbers(tokens: Token[]): Token[] {
-  const counters = [0, 0, 0, 0, 0, 0];
+/** 给标题插入自动编号（复制 inline token 后写入序号，不改动原始数组）
+ *  序号格式为多级点分：1 / 1.2 / 1.2.2
+ *  `maxLevel` 控制编号到第几级标题（默认 6） */
+export function withHeadingNumbers(tokens: Token[], maxLevel = 6): Token[] {
+  const numberer = new HeadingNumberer(maxLevel);
   const out = tokens.slice();
   for (let i = 0; i < out.length; i++) {
     const t = out[i];
     if (t.type !== "heading_open") continue;
     const level = Number(t.tag.slice(1));
-    if (level < 1 || level > 6) continue;
-    counters[level - 1] += 1;
-    for (let j = level; j < 6; j++) counters[j] = 0;
+    const number = numberer.next(level);
+    if (!number) continue;
     const inline = out[i + 1];
     if (!inline || inline.type !== "inline") continue;
     const proto = Object.getPrototypeOf(inline) as object;
@@ -147,7 +149,7 @@ export function withHeadingNumbers(tokens: Token[]): Token[] {
       type: "html_inline",
       tag: "",
       nesting: 0,
-      content: `<span class="md-secnum">${counters.slice(0, level).join(".")} </span>`,
+      content: `<span class="md-secnum">${number} </span>`,
       children: null,
       attrs: null,
       map: null,
