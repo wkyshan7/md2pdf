@@ -7,7 +7,7 @@ import taskLists from "markdown-it-task-lists";
 import katex from "@vscode/markdown-it-katex";
 import hljs from "highlight.js/lib/common";
 import { resolveAssetSrc, type AssetMap } from "./assets";
-import { HeadingNumberer } from "./headingNumbers";
+import { HeadingNumberer, isHeadingUnnumbered } from "./headingNumbers";
 
 export function escapeHtml(s: string): string {
   return s
@@ -116,7 +116,11 @@ export function collectHeadings(tokens: Token[]): Heading[] {
     const text = inline && inline.type === "inline" ? inline.content : "";
     out.push({
       level: Number(t.tag.slice(1)),
-      text: text.replace(/[#*`_~[\]]/g, "").trim(),
+      // 去掉 markdown-it-attrs 的 {#id .class} 片段，避免进入目录 / 同步滚动文本
+      text: text
+        .replace(/\{[^}]*\}/g, "")
+        .replace(/[#*`_~[\]]/g, "")
+        .trim(),
       id: String(t.attrGet("id") ?? ""),
       line: t.map ? t.map[0] : 0,
     });
@@ -138,7 +142,7 @@ export function withHeadingNumbers(tokens: Token[], maxLevel = 6): Token[] {
     const t = out[i];
     if (t.type !== "heading_open") continue;
     const level = Number(t.tag.slice(1));
-    const number = numberer.next(level);
+    const number = numberer.next(level, isHeadingUnnumbered(t));
     if (!number) continue;
     const inline = out[i + 1];
     if (!inline || inline.type !== "inline") continue;

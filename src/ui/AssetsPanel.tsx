@@ -9,6 +9,9 @@ export type AssetToast = (text: string, kind?: AssetToastKind) => void;
 export interface AssetsPanelProps {
   open: boolean;
   onClose: () => void;
+  /** 当前标签页由外部控制，便于从工具栏分别打开「字体」「图片」 */
+  tab: AssetsTab;
+  onTabChange: (tab: AssetsTab) => void;
   fonts: FontAsset[];
   images: ImageAsset[];
   bodyFontId?: string;
@@ -22,9 +25,14 @@ export interface AssetsPanelProps {
   onApplyBodyFont: (id: string | null) => void;
   onApplyCodeFont: (id: string | null) => void;
   onInsertImage: (asset: ImageAsset, mode: "ref" | "dataUrl") => void;
-  onClearAll: () => void;
+  /** 把当前文档（含图片）保存为 .mdstudio.json */
+  onSaveDocument: () => void;
+  onClearFonts: () => void;
+  onClearImages: () => void;
   onToast: AssetToast;
 }
+
+export type AssetsTab = "fonts" | "images";
 
 const WEIGHTS = [100, 200, 300, 400, 500, 600, 700, 800, 900];
 const FONT_ACCEPT = ".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2";
@@ -39,8 +47,7 @@ const FONT_FORMAT_LABEL: Record<FontAsset["format"], string> = {
 
 /** 资源库面板：集中导入 / 管理自定义字体与图片 */
 export function AssetsPanel(props: AssetsPanelProps) {
-  const { open, onClose, fonts, images } = props;
-  const [tab, setTab] = useState<"fonts" | "images">("fonts");
+  const { open, onClose, fonts, images, tab } = props;
   const [dragging, setDragging] = useState(false);
   const [sample, setSample] = useState("汉字排版 Aa Bb 0123");
   const fontInputRef = useRef<HTMLInputElement>(null);
@@ -56,8 +63,6 @@ export function AssetsPanel(props: AssetsPanelProps) {
   }, [open, onClose]);
 
   if (!open) return null;
-
-  const totalSize = [...fonts, ...images].reduce((sum, a) => sum + a.size, 0);
 
   const handleInput = (e: ChangeEvent<HTMLInputElement>, kind: "fonts" | "images"): void => {
     const files = Array.from(e.target.files ?? []);
@@ -120,11 +125,11 @@ export function AssetsPanel(props: AssetsPanelProps) {
         </div>
 
         <div className="assets-tabs seg">
-          <button className={tab === "fonts" ? "active" : ""} onClick={() => setTab("fonts")}>
-            字体 {fonts.length ? `(${fonts.length})` : ""}
+          <button className={tab === "fonts" ? "active" : ""} onClick={() => props.onTabChange("fonts")}>
+            字体库 {fonts.length ? `(${fonts.length})` : ""}
           </button>
-          <button className={tab === "images" ? "active" : ""} onClick={() => setTab("images")}>
-            图片 {images.length ? `(${images.length})` : ""}
+          <button className={tab === "images" ? "active" : ""} onClick={() => props.onTabChange("images")}>
+            文档图片 {images.length ? `(${images.length})` : ""}
           </button>
         </div>
 
@@ -153,7 +158,9 @@ export function AssetsPanel(props: AssetsPanelProps) {
                 <button className="btn primary" onClick={() => fontInputRef.current?.click()}>
                   ＋ 导入字体文件
                 </button>
-                <span className="hint">支持 TTF / OTF / WOFF / WOFF2，可一次选多个</span>
+                <span className="hint">
+                  TTF / OTF / WOFF / WOFF2，可多选；字体是全局资源，保存在本机供所有文档使用
+                </span>
                 <span className="spacer" />
                 <label className="assets-sample-input">
                   预览文本
@@ -247,7 +254,13 @@ export function AssetsPanel(props: AssetsPanelProps) {
                 <button className="btn primary" onClick={() => imageInputRef.current?.click()}>
                   ＋ 导入图片
                 </button>
-                <span className="hint">PNG / JPEG / GIF / WebP / SVG，导出时会自动内嵌</span>
+                <button className="btn" onClick={props.onSaveDocument} title="把文档与图片打包为 .mdstudio.json">
+                  ⤓ 保存文档
+                </button>
+                <span className="hint">
+                  PNG / JPEG / GIF / WebP / SVG。图片属于当前文档，会在「保存文档」时一起打包，
+                  打开该文件后 <code>asset://</code> 引用会自动指回图片。
+                </span>
               </div>
 
               {images.length === 0 ? (
@@ -301,19 +314,31 @@ export function AssetsPanel(props: AssetsPanelProps) {
 
         <div className="assets-foot">
           <span className="hint">
-            共 {fonts.length} 个字体、{images.length} 张图片 · {humanSize(totalSize)}
+            {tab === "fonts"
+              ? `字体库（全局）：${fonts.length} 个 · ${humanSize(fonts.reduce((sum, f) => sum + f.size, 0))}`
+              : `文档图片（随文档）：${images.length} 张 · ${humanSize(images.reduce((sum, img) => sum + img.size, 0))}`}
           </span>
           <span className="spacer" />
-          {(fonts.length > 0 || images.length > 0) && (
+          {tab === "fonts" && fonts.length > 0 && (
             <button
               className="btn ghost danger"
               onClick={() => {
-                if (window.confirm("确定清空全部已导入资源？正文/代码字体设置也会一并清除。")) {
-                  props.onClearAll();
+                if (window.confirm("确定清空字体库？正文/代码字体设置也会一并清除。")) props.onClearFonts();
+              }}
+            >
+              清空字体库
+            </button>
+          )}
+          {tab === "images" && images.length > 0 && (
+            <button
+              className="btn ghost danger"
+              onClick={() => {
+                if (window.confirm("确定清空当前文档的全部图片？已插入正文的引用会显示为占位图。")) {
+                  props.onClearImages();
                 }
               }}
             >
-              清空全部
+              清空文档图片
             </button>
           )}
         </div>

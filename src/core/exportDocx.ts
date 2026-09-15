@@ -30,7 +30,7 @@ import type { Token } from "markdown-it";
 import { parse } from "./parser";
 import { PAGE_SIZES, type DocxOptions, type ExportMeta, type ThemeTokens } from "./types";
 import { primaryFamily, resolveAssetSrc, type AssetMap } from "./assets";
-import { HeadingNumberer } from "./headingNumbers";
+import { HeadingNumberer, isHeadingUnnumbered } from "./headingNumbers";
 import { downloadBlob, safeFilename } from "./download";
 
 /** 取代码字体栈第一个族名，用于 docx 的 run 字体 */
@@ -257,7 +257,7 @@ function walk(tokens: Token[], ctx: WalkContext): (Paragraph | Table)[] {
       const inline = tokens[i + 1];
       let prefix = "";
       if (ctx.numbered) {
-        const number = ctx.numberer.next(level);
+        const number = ctx.numberer.next(level, isHeadingUnnumbered(t));
         if (number) prefix = `${number} `;
       }
       const runs = inlineRuns(inline, ctx.tokens, ctx.assets);

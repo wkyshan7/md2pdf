@@ -2,7 +2,6 @@ import { useRef } from "react";
 import type { DocxOptions, ExportMeta, PptxOptions, RasterPdfOptions, ThemeTokens } from "../core/types";
 import { PAGE_SIZES } from "../core/types";
 import { CODE_THEMES, getCodeTheme } from "../core/highlightThemes";
-import { THEME_PRESETS } from "../core/themes";
 import { downloadText } from "../core/download";
 import {
   ColorInput,
@@ -38,6 +37,14 @@ const FONT_OPTIONS = [
   { value: '"Microsoft YaHei", "PingFang SC", sans-serif', label: "微软雅黑 / 苹方" },
 ];
 
+/** 预设 / 自定义主题在面板里统一展示的视图类型 */
+export interface ThemeOption {
+  id: string;
+  name: string;
+  description: string;
+  builtin: boolean;
+}
+
 export interface SettingsPanelProps {
   tokens: ThemeTokens;
   patch: (p: Partial<ThemeTokens>) => void;
@@ -52,6 +59,13 @@ export interface SettingsPanelProps {
   onPrintPdf: () => void;
   presetId: string;
   onPreset: (id: string) => void;
+  /** 内置预设 + 用户自定义主题 */
+  themes: ThemeOption[];
+  /** 当前选中的是否是自定义主题（决定是否显示「更新 / 删除」） */
+  activeIsUserTheme: boolean;
+  onCreateTheme: (name: string) => void;
+  onUpdateTheme: () => void;
+  onDeleteTheme: (id: string) => void;
   onReset: () => void;
   /** 打开资源库（导入 / 管理字体与图片） */
   onOpenAssets: () => void;
@@ -83,21 +97,49 @@ export function SettingsPanel(props: SettingsPanelProps) {
     reader.readAsText(file, "utf-8");
   };
 
+  const createTheme = (): void => {
+    const name = window.prompt("新主题名称", "我的主题");
+    if (name === null) return;
+    props.onCreateTheme(name);
+  };
+
+  const deleteTheme = (id: string): void => {
+    if (window.confirm("确定删除这个自定义主题？")) props.onDeleteTheme(id);
+  };
+
   return (
     <div className="panel-inner">
       <Section title="主题预设" open>
         <div className="preset-grid">
-          {THEME_PRESETS.map((p) => (
+          {props.themes.map((p) => (
             <button
               key={p.id}
-              className={`preset-card${props.presetId === p.id ? " active" : ""}`}
+              className={`preset-card${props.presetId === p.id ? " active" : ""}${p.builtin ? "" : " user"}`}
               onClick={() => props.onPreset(p.id)}
               title={p.description}
             >
-              <div className="name">{p.name}</div>
+              <div className="name">
+                {p.name}
+                {!p.builtin && <span className="preset-tag">自定义</span>}
+              </div>
               <div className="desc">{p.description}</div>
             </button>
           ))}
+        </div>
+        <div className="preset-actions">
+          <button className="btn primary" onClick={createTheme}>
+            ＋ 新建主题
+          </button>
+          {props.activeIsUserTheme && (
+            <>
+              <button className="btn ghost" onClick={props.onUpdateTheme} title="用当前设置为该主题保存新的外观">
+                更新当前主题
+              </button>
+              <button className="btn ghost danger" onClick={() => deleteTheme(props.presetId)}>
+                删除主题
+              </button>
+            </>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn ghost" onClick={exportThemeJson}>
@@ -109,6 +151,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
           <button className="btn ghost" onClick={props.onReset}>
             恢复默认
           </button>
+        </div>
+        <div className="hint">
+          「新建主题」会把当前所有外观设置存成一个自定义主题，与内置预设并列，随时切换。
         </div>
         <input
           ref={fileRef}
@@ -210,6 +255,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
             onChange={(v) => patch({ headingNumberMaxLevel: Number(v) })}
             options={[1, 2, 3, 4, 5, 6].map((n) => ({ value: String(n), label: `H1–H${n}` }))}
           />
+        )}
+        {t.headingNumbered && (
+          <div className="hint">
+            想要某个标题跳过编号，在标题末尾加属性即可，例如 <code>## 摘要 {"{.no-number}"}</code>
+            （也支持 <code>.unnumbered</code>）。被标记的标题不显示序号，也不占用编号，下一个标题序号保持连续。
+          </div>
         )}
       </Section>
 

@@ -46,6 +46,10 @@ export interface UseAssetsResult {
   addImages: (files: File[]) => Promise<ImportReport<ImageAsset>>;
   remove: (id: string) => Promise<void>;
   updateFont: (id: string, patch: Partial<FontAsset>) => void;
+  /** 用文档文件里的图片替换当前文档的全部图片 */
+  replaceImages: (images: ImageAsset[]) => Promise<void>;
+  clearFonts: () => Promise<void>;
+  clearImages: () => Promise<void>;
   clearAll: () => Promise<void>;
 }
 
@@ -57,6 +61,15 @@ export function useAssets(): UseAssetsResult {
   const [persistent, setPersistent] = useState(true);
   /** 字体元信息（族名等）可在面板里逐字编辑；二进制可能很大，写入做防抖 */
   const saveTimers = useRef(new Map<string, number>());
+  const fontsRef = useRef<FontAsset[]>([]);
+  const imagesRef = useRef<ImageAsset[]>([]);
+
+  useEffect(() => {
+    fontsRef.current = fonts;
+  }, [fonts]);
+  useEffect(() => {
+    imagesRef.current = images;
+  }, [images]);
 
   useEffect(() => {
     let alive = true;
@@ -184,6 +197,25 @@ export function useAssets(): UseAssetsResult {
     [fonts],
   );
 
+  const replaceImages = useCallback(async (next: ImageAsset[]): Promise<void> => {
+    const previous = imagesRef.current;
+    await Promise.all(previous.map((img) => deleteAsset(img.id)));
+    for (const img of next) await saveAsset(img);
+    setImages(next);
+  }, []);
+
+  const clearFonts = useCallback(async (): Promise<void> => {
+    for (const timer of saveTimers.current.values()) window.clearTimeout(timer);
+    saveTimers.current.clear();
+    await Promise.all(fontsRef.current.map((f) => deleteAsset(f.id)));
+    setFonts([]);
+  }, []);
+
+  const clearImages = useCallback(async (): Promise<void> => {
+    await Promise.all(imagesRef.current.map((img) => deleteAsset(img.id)));
+    setImages([]);
+  }, []);
+
   const clearAll = useCallback(async (): Promise<void> => {
     for (const timer of saveTimers.current.values()) window.clearTimeout(timer);
     saveTimers.current.clear();
@@ -192,5 +224,19 @@ export function useAssets(): UseAssetsResult {
     setImages([]);
   }, []);
 
-  return { fonts, images, map, ready, persistent, addFonts, addImages, remove, updateFont, clearAll };
+  return {
+    fonts,
+    images,
+    map,
+    ready,
+    persistent,
+    addFonts,
+    addImages,
+    remove,
+    updateFont,
+    replaceImages,
+    clearFonts,
+    clearImages,
+    clearAll,
+  };
 }

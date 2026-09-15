@@ -3,7 +3,7 @@ import type { Token } from "markdown-it";
 import { parse } from "./parser";
 import type { ExportMeta, PptxOptions, ThemeTokens } from "./types";
 import { primaryFamily, resolveAssetSrc, type AssetMap } from "./assets";
-import { HeadingNumberer } from "./headingNumbers";
+import { HeadingNumberer, isHeadingUnnumbered } from "./headingNumbers";
 import { safeFilename } from "./download";
 
 /* ── 中间表示 ─────────────────────────────────────────── */
@@ -106,7 +106,7 @@ function buildSlides(
     if (t.type === "heading_open") {
       const level = Number(t.tag.slice(1));
       const text = inlineText(tokens[i + 1]);
-      const number = numbering.enabled ? numberer.next(level) : null;
+      const number = numbering.enabled ? numberer.next(level, isHeadingUnnumbered(t)) : null;
       if (level <= splitLevel) {
         startSlide(text, level === 1 ? "section" : "content", number ?? undefined);
       } else {

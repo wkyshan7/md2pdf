@@ -5,6 +5,18 @@
 import { Document, Packer } from "docx";
 import { parse, renderTokens, withHeadingNumbers } from "../src/core/parser";
 import { computeHeadingNumbers } from "../src/core/headingNumbers";
+import {
+  BUNDLE_FORMAT,
+  buildDocumentBundle,
+  looksLikeDocumentBundle,
+  parseDocumentBundle,
+} from "../src/core/documentBundle";
+import {
+  fromUserThemeId,
+  isUserThemeId,
+  newUserThemeId,
+  toUserThemeId,
+} from "../src/core/userThemes";
 import { buildStandaloneHtml } from "../src/core/document";
 import { buildPrintCss, BASE_CSS } from "../src/core/themeCss";
 import { resolveTokens, THEME_PRESETS } from "../src/core/themes";
@@ -546,6 +558,19 @@ function testHeadingNumbers(): void {
   check("限制层级时只编号 H1/H2", count === 2, String(count));
   check("被限制的 H3 不编号", !limited.includes("1.1.1"));
 
+  // 跳过 / 忽略某个标题
+  const skipped = renderTokens(
+    withHeadingNumbers(parse("# A\n\n## 摘要 {.no-number}\n\n## B").tokens),
+  );
+  const skipCount = (skipped.match(/md-secnum/g) ?? []).length;
+  check("带 .no-number 的标题不编号", skipCount === 2, String(skipCount));
+  check("被跳过的标题保留 class", skipped.includes("no-number"));
+  check("跳过标题不占用编号（下一标题仍为 1.1）", skipped.includes("1.1 </span>"), skipped);
+  const skipped2 = renderTokens(
+    withHeadingNumbers(parse("# A\n\n## 附录 {.unnumbered}\n\n## B").tokens),
+  );
+  check(".unnumbered 同样生效", (skipped2.match(/md-secnum/g) ?? []).length === 2);
+
   const defaultTokens = resolveTokens(THEME_PRESETS[0]);
   check("标题编号默认开启", defaultTokens.headingNumbered === true);
   check("默认编号到 H6", defaultTokens.headingNumberMaxLevel === 6, String(defaultTokens.headingNumberMaxLevel));
@@ -555,6 +580,55 @@ function testHeadingNumbers(): void {
     headingNumbered: true,
   });
   check("DOCX 开启标题编号不报错", docxNumbered.paragraphs >= 2, String(docxNumbered.paragraphs));
+}
+
+console.log("[12] 文档文件与自定义主题");
+testBundleAndThemes();
+
+function testBundleAndThemes(): void {
+  const tinyPng =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const image = {
+    id: "img1",
+    kind: "image" as const,
+    name: "pic",
+    filename: "pic.png",
+    mime: "image/png",
+    size: 100,
+    width: 1,
+    height: 1,
+    dataUrl: tinyPng,
+    createdAt: 1,
+  };
+  const bundle = buildDocumentBundle({
+    markdown: "# X\n\n![图](asset://img1)\n",
+    tokens,
+    meta,
+    presetId: "academic",
+    images: [image],
+  });
+  check("文档文件格式标记", bundle.format === BUNDLE_FORMAT, bundle.format);
+  const round = parseDocumentBundle(JSON.stringify(bundle));
+  check("文档文件往返 Markdown", round.markdown === "# X\n\n![图](asset://img1)\n");
+  check("文档文件携带图片", round.images.length === 1 && round.images[0].id === "img1");
+  check("文档文件保留主题", round.tokens.headingNumbered === tokens.headingNumbered);
+  check("looksLikeDocumentBundle 识别文档文件", looksLikeDocumentBundle(JSON.stringify(bundle)));
+  check("普通 Markdown 不被误判", !looksLikeDocumentBundle("# Title\n\n正文"));
+  let threw = false;
+  try {
+    parseDocumentBundle("{}");
+  } catch {
+    threw = true;
+  }
+  check("非法文档文件报错", threw);
+  const badImage = parseDocumentBundle(
+    JSON.stringify({ ...bundle, images: [{ id: "x", kind: "image" }] }),
+  );
+  check("过滤不完整的图片记录", badImage.images.length === 0);
+
+  check("用户主题 id 往返", fromUserThemeId(toUserThemeId("abc")) === "abc");
+  check("识别用户主题 id", isUserThemeId(toUserThemeId("abc")) && !isUserThemeId("academic"));
+  check("新主题 id 唯一", newUserThemeId() !== newUserThemeId());
 }
 
 console.log("");

@@ -958,3 +958,32 @@ textarea.small {
     width: 140px;
   }
 }
+
+/* ── 主题预设：自定义主题标识与操作 ─────────── */
+.preset-card.user {
+  border-style: dashed;
+}
+.preset-card .name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.preset-tag {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: #cfe0ff;
+  background: color-mix(in srgb, var(--ui-accent) 34%, transparent);
+}
+.preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.preset-actions .btn {
+  flex: 1 1 auto;
+  justify-content: center;
+}

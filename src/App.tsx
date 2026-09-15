@@ -1,7 +1,14 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { DEFAULT_TOKENS, THEME_PRESETS, resolveTokens } from "./core/themes";
-import type { DocxOptions, ExportMeta, PptxOptions, RasterPdfOptions, ThemeTokens } from "./core/types";
+import type {
+  DocxOptions,
+  ExportMeta,
+  PptxOptions,
+  RasterPdfOptions,
+  ThemePreset,
+  ThemeTokens,
+} from "./core/types";
 import { renderMarkdown } from "./core/render";
 import { buildThemeStyle } from "./core/themeCss";
 import { getCodeTheme } from "./core/highlightThemes";
@@ -21,9 +28,24 @@ import { exportRasterPdf } from "./core/exportPdfRaster";
 import { exportPptx } from "./core/exportPptx";
 import { exportDocx } from "./core/exportDocx";
 import { downloadText, readTextFile, safeFilename } from "./core/download";
+import {
+  buildDocumentBundle,
+  looksLikeDocumentBundle,
+  parseDocumentBundle,
+  type DocumentBundle,
+} from "./core/documentBundle";
+import {
+  fromUserThemeId,
+  isUserThemeId,
+  loadUserThemes,
+  newUserThemeId,
+  saveUserThemes,
+  toUserThemeId,
+  type UserTheme,
+} from "./core/userThemes";
 import { SAMPLE_MARKDOWN } from "./core/sample";
-import { SettingsPanel } from "./ui/SettingsPanel";
-import { AssetsPanel } from "./ui/AssetsPanel";
+import { SettingsPanel, type ThemeOption } from "./ui/SettingsPanel";
+import { AssetsPanel, type AssetsTab } from "./ui/AssetsPanel";
 import { useAssets } from "./ui/useAssets";
 import { Preview } from "./ui/Preview";
 import { useScrollSync } from "./ui/useScrollSync";
@@ -154,6 +176,8 @@ export default function App() {
   const pwa = usePwaInstall();
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showAssets, setShowAssets] = useState(false);
+  const [assetsTab, setAssetsTab] = useState<AssetsTab>("fonts");
+  const [userThemes, setUserThemes] = useState<UserTheme[]>(() => loadUserThemes());
   const fileRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -177,6 +201,11 @@ export default function App() {
     bodyFontId,
     codeFontId,
   } = state;
+
+  /* 持久化 */
+  useEffect(() => {
+    saveUserThemes(userThemes);
+  }, [userThemes]);
 
   /* 持久化 */
   useEffect(() => {
@@ -232,20 +261,47 @@ export default function App() {
     [],
   );
 
-  const applyPreset = useCallback(
-    (id: string) => {
-      const preset = THEME_PRESETS.find((p) => p.id === id);
-      if (!preset) return;
-      setState((prev) => {
-        let next = resolveTokens(preset);
-        const body = prev.bodyFontId ? assets.fonts.find((f) => f.id === prev.bodyFontId) : undefined;
-        if (body) next = { ...next, fontFamily: prependFamily(body.family, next.fontFamily) };
-        const code = prev.codeFontId ? assets.fonts.find((f) => f.id === prev.codeFontId) : undefined;
-        if (code) next = { ...next, codeFontFamily: prependFamily(code.family, next.codeFontFamily) };
-        return { ...prev, presetId: id, tokens: next };
-      });
+  /** 内置预设 / 自定义主题统一查找 */
+  const findPreset = useCallback(
+    (id: string): ThemePreset | null => {
+      const builtin = THEME_PRESETS.find((p) => p.id === id);
+      if (builtin) return builtin;
+      if (isUserThemeId(id)) {
+        const theme = userThemes.find((t) => t.id === fromUserThemeId(id));
+        if (theme) {
+          return {
+            id,
+            name: theme.name,
+            description: theme.description ?? "自定义主题",
+            tokens: theme.tokens,
+          };
+        }
+      }
+      return null;
+    },
+    [userThemes],
+  );
+
+  /** 套用预设时保留用户已启用的自定义字体 */
+  const resolvePresetTokens = useCallback(
+    (preset: ThemePreset, prev: PersistedState): ThemeTokens => {
+      let next = resolveTokens(preset);
+      const body = prev.bodyFontId ? assets.fonts.find((f) => f.id === prev.bodyFontId) : undefined;
+      if (body) next = { ...next, fontFamily: prependFamily(body.family, next.fontFamily) };
+      const code = prev.codeFontId ? assets.fonts.find((f) => f.id === prev.codeFontId) : undefined;
+      if (code) next = { ...next, codeFontFamily: prependFamily(code.family, next.codeFontFamily) };
+      return next;
     },
     [assets.fonts],
+  );
+
+  const applyPreset = useCallback(
+    (id: string) => {
+      const preset = findPreset(id);
+      if (!preset) return;
+      setState((prev) => ({ ...prev, presetId: id, tokens: resolvePresetTokens(preset, prev) }));
+    },
+    [findPreset, resolvePresetTokens],
   );
 
   const resetTokens = useCallback(() => {
@@ -258,6 +314,68 @@ export default function App() {
       return { ...prev, tokens: next };
     });
   }, [assets.fonts]);
+
+  /* ── 自定义主题：新建 / 更新 / 删除 ───────────── */
+  const createTheme = useCallback(
+    (name: string) => {
+      const now = Date.now();
+      const theme: UserTheme = {
+        id: newUserThemeId(),
+        name: name.trim() || "自定义主题",
+        description: "自定义主题",
+        tokens: { ...tokens },
+        createdAt: now,
+        updatedAt: now,
+      };
+      setUserThemes((prev) => [...prev, theme]);
+      update({ presetId: toUserThemeId(theme.id) });
+      toast(`已新建主题「${theme.name}」`, "success");
+    },
+    [tokens, update, toast],
+  );
+
+  const updateActiveTheme = useCallback(() => {
+    if (!isUserThemeId(presetId)) return;
+    const rawId = fromUserThemeId(presetId);
+    setUserThemes((prev) =>
+      prev.map((t) => (t.id === rawId ? { ...t, tokens: { ...tokens }, updatedAt: Date.now() } : t)),
+    );
+    toast("已用当前设置更新主题", "success");
+  }, [presetId, tokens, toast]);
+
+  const deleteTheme = useCallback(
+    (id: string) => {
+      if (!isUserThemeId(id)) return;
+      const rawId = fromUserThemeId(id);
+      setUserThemes((prev) => prev.filter((t) => t.id !== rawId));
+      if (presetId === id) {
+        const fallback = THEME_PRESETS[0];
+        setState((prev) => ({
+          ...prev,
+          presetId: fallback.id,
+          tokens: resolvePresetTokens(fallback, prev),
+        }));
+      }
+      toast("已删除主题", "info");
+    },
+    [presetId, resolvePresetTokens, toast],
+  );
+
+  const themeOptions = useMemo<ThemeOption[]>(() => {
+    const builtin: ThemeOption[] = THEME_PRESETS.map((p) => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      builtin: true,
+    }));
+    const custom: ThemeOption[] = userThemes.map((t) => ({
+      id: toUserThemeId(t.id),
+      name: t.name,
+      description: t.description ?? "自定义主题",
+      builtin: false,
+    }));
+    return [...builtin, ...custom];
+  }, [userThemes]);
 
   /* ── 自定义字体：启用 / 关闭 / 重命名 ─────────── */
   const setBodyFontAsset = useCallback(
@@ -352,7 +470,7 @@ export default function App() {
     [assets],
   );
 
-  const handleClearAllAssets = useCallback(() => {
+  const handleClearFonts = useCallback(() => {
     setState((prev) => ({
       ...prev,
       bodyFontId: undefined,
@@ -363,8 +481,13 @@ export default function App() {
         codeFontFamily: stripKnownFamilies(prev.tokens.codeFontFamily, assets.fonts),
       },
     }));
-    void assets.clearAll();
-    toast("已清空全部资源", "info");
+    void assets.clearFonts();
+    toast("已清空字体库", "info");
+  }, [assets, toast]);
+
+  const handleClearImages = useCallback(() => {
+    void assets.clearImages();
+    toast("已清空文档图片", "info");
   }, [assets, toast]);
 
   /* ── 图片插入 ─────────────────────────────── */
@@ -449,20 +572,69 @@ export default function App() {
   });
 
   /* ── 文件操作 ─────────────────────────────── */
+  /** 应用文档文件：Markdown + 主题 + 图片一起恢复，图片引用随之重定向 */
+  const applyBundle = useCallback(
+    async (bundle: DocumentBundle, filename: string) => {
+      setState((prev) => ({
+        ...prev,
+        markdown: bundle.markdown,
+        tokens: { ...DEFAULT_TOKENS, ...bundle.tokens },
+        meta: { ...DEFAULT_META, ...bundle.meta },
+        presetId: bundle.presetId || prev.presetId,
+        bodyFontId: bundle.bodyFontId,
+        codeFontId: bundle.codeFontId,
+      }));
+      await assets.replaceImages(bundle.images);
+      toast(`已打开文档 ${filename}（含 ${bundle.images.length} 张图片）`, "success");
+    },
+    [assets, toast],
+  );
+
   const openFile = useCallback(
     async (file: File) => {
       const text = await readTextFile(file);
+      if (looksLikeDocumentBundle(text)) {
+        try {
+          await applyBundle(parseDocumentBundle(text), file.name);
+        } catch (err) {
+          toast(`打开文档失败：${err instanceof Error ? err.message : String(err)}`, "error");
+        }
+        return;
+      }
+      if (/\.json$/i.test(file.name)) {
+        toast("这不是 MD Studio 文档文件（.mdstudio.json）", "error");
+        return;
+      }
       const base = file.name.replace(/\.(md|markdown|txt)$/i, "");
       setState((prev) => ({ ...prev, markdown: text, meta: { ...prev.meta, title: base } }));
       toast(`已打开 ${file.name}`, "success");
     },
-    [toast],
+    [applyBundle, toast],
   );
 
   const saveMarkdown = useCallback(() => {
     downloadText(markdown, `${safeFilename(meta.title, "document")}.md`, "text/markdown");
     toast("Markdown 已保存", "success");
   }, [markdown, meta.title, toast]);
+
+  /** 保存文档文件：连同当前文档的图片一起打包 */
+  const saveDocument = useCallback(() => {
+    const bundle = buildDocumentBundle({
+      markdown,
+      tokens,
+      meta,
+      presetId,
+      bodyFontId,
+      codeFontId,
+      images: assets.images,
+    });
+    downloadText(
+      JSON.stringify(bundle, null, 2),
+      `${safeFilename(meta.title, "document")}.mdstudio.json`,
+      "application/json",
+    );
+    toast(`文档已保存（含 ${assets.images.length} 张图片）`, "success");
+  }, [markdown, tokens, meta, presetId, bodyFontId, codeFontId, assets.images, toast]);
 
   /* ── 导出 ─────────────────────────────────── */
   const withBusy = useCallback(
@@ -661,10 +833,13 @@ export default function App() {
           onChange={(e) => patchMeta({ title: e.target.value })}
         />
         <button className="btn" onClick={() => fileRef.current?.click()}>
-          打开 MD
+          打开文件
         </button>
         <button className="btn" onClick={saveMarkdown}>
           保存 MD
+        </button>
+        <button className="btn" onClick={saveDocument} title="把文档与图片打包为 .mdstudio.json">
+          ⤓ 保存文档
         </button>
         {!pwa.installed && (pwa.canInstall || pwa.needsManualInstall) && (
           <button className="btn" onClick={onInstallClick} title="安装为应用，可离线使用">
@@ -673,12 +848,24 @@ export default function App() {
         )}
         <span className="spacer" />
         <button
-          className={`btn${showAssets ? " active" : ""}`}
-          onClick={() => setShowAssets(true)}
-          title="导入并管理自定义字体与图片"
+          className={`btn${showAssets && assetsTab === "fonts" ? " active" : ""}`}
+          onClick={() => {
+            setAssetsTab("fonts");
+            setShowAssets(true);
+          }}
+          title="导入 / 管理全局字体"
         >
-          🗂 资源库
-          {assets.fonts.length + assets.images.length > 0 ? ` ${assets.fonts.length + assets.images.length}` : ""}
+          🅰 字体{assets.fonts.length ? ` ${assets.fonts.length}` : ""}
+        </button>
+        <button
+          className={`btn${showAssets && assetsTab === "images" ? " active" : ""}`}
+          onClick={() => {
+            setAssetsTab("images");
+            setShowAssets(true);
+          }}
+          title="导入 / 管理当前文档的图片"
+        >
+          🖼 图片{assets.images.length ? ` ${assets.images.length}` : ""}
         </button>
         <button className="btn" onClick={() => update({ markdown: SAMPLE_MARKDOWN })}>
           载入示例
@@ -808,8 +995,16 @@ export default function App() {
             onPrintPdf={doPrintPdf}
             presetId={presetId}
             onPreset={applyPreset}
+            themes={themeOptions}
+            activeIsUserTheme={isUserThemeId(presetId)}
+            onCreateTheme={createTheme}
+            onUpdateTheme={updateActiveTheme}
+            onDeleteTheme={deleteTheme}
             onReset={resetTokens}
-            onOpenAssets={() => setShowAssets(true)}
+            onOpenAssets={() => {
+              setAssetsTab("fonts");
+              setShowAssets(true);
+            }}
           />
         </aside>
       </div>
@@ -829,7 +1024,7 @@ export default function App() {
       <input
         ref={fileRef}
         type="file"
-        accept=".md,.markdown,.txt,text/markdown"
+        accept=".md,.markdown,.txt,.json,text/markdown,application/json"
         style={{ display: "none" }}
         onChange={(e) => {
           const f = e.target.files?.[0];
@@ -841,6 +1036,8 @@ export default function App() {
       <AssetsPanel
         open={showAssets}
         onClose={() => setShowAssets(false)}
+        tab={assetsTab}
+        onTabChange={setAssetsTab}
         fonts={assets.fonts}
         images={assets.images}
         bodyFontId={bodyFontId}
@@ -853,7 +1050,9 @@ export default function App() {
         onApplyBodyFont={applyBodyFont}
         onApplyCodeFont={applyCodeFont}
         onInsertImage={handleInsertImage}
-        onClearAll={handleClearAllAssets}
+        onSaveDocument={saveDocument}
+        onClearFonts={handleClearFonts}
+        onClearImages={handleClearImages}
         onToast={toast}
       />
 
