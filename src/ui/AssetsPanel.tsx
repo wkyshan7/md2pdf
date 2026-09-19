@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
 import type { FontAsset, FontStyle, ImageAsset } from "../core/assets";
 import { assetRef, humanSize, stripExtension } from "../core/assets";
+import { imageBasename, type LocalImageRef } from "../core/localImages";
 
 export type AssetToastKind = "info" | "success" | "error";
 export type AssetToast = (text: string, kind?: AssetToastKind) => void;
@@ -25,6 +26,10 @@ export interface AssetsPanelProps {
   onApplyBodyFont: (id: string | null) => void;
   onApplyCodeFont: (id: string | null) => void;
   onInsertImage: (asset: ImageAsset, mode: "ref" | "dataUrl") => void;
+  /** 正文里检测到的本地路径图片引用（自动导入并修复的目标） */
+  localImageRefs: LocalImageRef[];
+  /** 导入本地图片，并把命中的本地路径链接改写成 asset:// 引用 */
+  onImportLocalImages: (files: File[]) => void | Promise<void>;
   /** 把当前文档（含图片）保存为 .mdstudio.json */
   onSaveDocument: () => void;
   onClearFonts: () => void;
@@ -37,6 +42,7 @@ export type AssetsTab = "fonts" | "images";
 const WEIGHTS = [100, 200, 300, 400, 500, 600, 700, 800, 900];
 const FONT_ACCEPT = ".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2";
 const FONT_EXT_RE = /\.(ttf|otf|woff2?)$/i;
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i;
 
 const FONT_FORMAT_LABEL: Record<FontAsset["format"], string> = {
   truetype: "TTF",
@@ -52,6 +58,8 @@ export function AssetsPanel(props: AssetsPanelProps) {
   const [sample, setSample] = useState("汉字排版 Aa Bb 0123");
   const fontInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const localImageInputRef = useRef<HTMLInputElement>(null);
+  const localFolderInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -62,13 +70,29 @@ export function AssetsPanel(props: AssetsPanelProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  /** 已导入图片里是否有同名文件可匹配本地引用（必须在提前 return 之前，遵守 Hooks 规则） */
+  const localMatched = useMemo(() => {
+    const names = new Set(props.images.map((img) => imageBasename(img.filename || img.name)));
+    return props.localImageRefs.filter((ref) => names.has(ref.basename)).length;
+  }, [props.images, props.localImageRefs]);
+
   if (!open) return null;
 
-  const handleInput = (e: ChangeEvent<HTMLInputElement>, kind: "fonts" | "images"): void => {
+  const handleInput = (e: ChangeEvent<HTMLInputElement>, kind: "fonts" | "images" | "local"): void => {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
     if (!files.length) return;
-    void (kind === "fonts" ? props.onImportFonts(files) : props.onImportImages(files));
+    if (kind === "fonts") void props.onImportFonts(files);
+    else if (kind === "images") void props.onImportImages(files);
+    else {
+      // 从文件夹导入时会带出非图片文件，这里先过滤，避免逐个报错
+      const picked = files.filter((f) => f.type.startsWith("image/") || IMAGE_EXT_RE.test(f.name));
+      if (!picked.length) {
+        props.onToast("选中的文件夹里没有图片文件", "error");
+        return;
+      }
+      void props.onImportLocalImages(picked);
+    }
   };
 
   const onDrop = (e: DragEvent<HTMLDivElement>): void => {
@@ -250,6 +274,43 @@ export function AssetsPanel(props: AssetsPanelProps) {
             </>
           ) : (
             <>
+              {props.localImageRefs.length > 0 && (
+                <div className="assets-local">
+                  <div className="assets-local-head">
+                    <strong>检测到 {props.localImageRefs.length} 个本地图片链接</strong>
+                    <span className="hint">
+                      选择它们对应的本地图片（或直接选文件夹），正文里的路径会自动替换为
+                      <code>asset://</code> 引用并随文档保存。
+                    </span>
+                  </div>
+                  <div className="assets-local-list">
+                    {props.localImageRefs.slice(0, 10).map((ref) => (
+                      <span
+                        key={`${ref.start}-${ref.basename}`}
+                        className={`assets-local-item${props.images.some((img) => imageBasename(img.filename || img.name) === ref.basename) ? " ok" : ""}`}
+                        title={ref.src}
+                      >
+                        {ref.basename}
+                      </span>
+                    ))}
+                    {props.localImageRefs.length > 10 && (
+                      <span className="assets-local-more">…还有 {props.localImageRefs.length - 10} 个</span>
+                    )}
+                  </div>
+                  <div className="assets-local-actions">
+                    <button className="btn primary" onClick={() => localImageInputRef.current?.click()}>
+                      ＋ 选择图片并修复
+                    </button>
+                    <button className="btn" onClick={() => localFolderInputRef.current?.click()}>
+                      📁 从文件夹导入
+                    </button>
+                    <span className="hint">
+                      已匹配 {localMatched}/{props.localImageRefs.length}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <div className="assets-toolbar">
                 <button className="btn primary" onClick={() => imageInputRef.current?.click()}>
                   ＋ 导入图片
@@ -358,6 +419,25 @@ export function AssetsPanel(props: AssetsPanelProps) {
           multiple
           style={{ display: "none" }}
           onChange={(e) => handleInput(e, "images")}
+        />
+        <input
+          ref={localImageInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: "none" }}
+          onChange={(e) => handleInput(e, "local")}
+        />
+        <input
+          ref={(el) => {
+            localFolderInputRef.current = el;
+            // React 类型未声明 webkitdirectory，用属性方式开启文件夹选择
+            if (el) el.setAttribute("webkitdirectory", "");
+          }}
+          type="file"
+          multiple
+          style={{ display: "none" }}
+          onChange={(e) => handleInput(e, "local")}
         />
       </div>
     </div>

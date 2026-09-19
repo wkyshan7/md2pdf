@@ -22,6 +22,7 @@ import {
   type FontAsset,
   type ImageAsset,
 } from "./core/assets";
+import { findLocalImageRefs, imageBasename, rewriteLocalImageRefs } from "./core/localImages";
 import { exportHtml } from "./core/exportHtml";
 import { exportPdf as exportPdfViaPrint } from "./core/exportPdf";
 import { exportRasterPdf } from "./core/exportPdfRaster";
@@ -512,6 +513,49 @@ export default function App() {
     [markdown, update],
   );
 
+  /** 正文里指向本地路径的图片引用（浏览器无法直接读取，需要导入修复） */
+  const localImageRefs = useMemo(() => findLocalImageRefs(markdown), [markdown]);
+
+  /** 导入本地图片目录/文件，并把命中的本地路径链接替换成 asset:// 引用 */
+  const handleImportLocalImages = useCallback(
+    async (files: File[]) => {
+      const refs = findLocalImageRefs(markdown);
+      if (!refs.length) {
+        toast("正文里没有检测到本地图片链接", "info");
+        return;
+      }
+      const report = await assets.addImages(files);
+      for (const err of report.errors) toast(err, "error");
+      if (!report.added.length) return;
+
+      const byName = new Map<string, ImageAsset>();
+      for (const img of [...assets.images, ...report.added]) {
+        const key = imageBasename(img.filename || img.name);
+        if (!byName.has(key)) byName.set(key, img);
+      }
+      const { markdown: next, replaced, unmatched } = rewriteLocalImageRefs(markdown, refs, (ref) => {
+        const hit = byName.get(ref.basename);
+        return hit ? assetRef(hit.id) : null;
+      });
+      if (replaced) update({ markdown: next });
+
+      const base = `已导入 ${report.added.length} 张图片，修复 ${replaced} 个本地链接`;
+      if (unmatched.length) {
+        toast(
+          `${base}；${unmatched.length} 个链接未找到同名图片：${unmatched
+            .slice(0, 3)
+            .map((r) => r.basename)
+            .join("、")}${unmatched.length > 3 ? " …" : ""}`,
+          "error",
+        );
+      } else {
+        toast(base, "success");
+      }
+      if (isMobile && replaced) setMobileTab("editor");
+    },
+    [markdown, assets, update, toast, isMobile],
+  );
+
   const handleInsertImage = useCallback(
     (asset: ImageAsset, mode: "ref" | "dataUrl") => {
       const alt = stripExtension(asset.name) || "图片";
@@ -607,7 +651,18 @@ export default function App() {
       }
       const base = file.name.replace(/\.(md|markdown|txt)$/i, "");
       setState((prev) => ({ ...prev, markdown: text, meta: { ...prev.meta, title: base } }));
-      toast(`已打开 ${file.name}`, "success");
+      const localRefs = findLocalImageRefs(text);
+      if (localRefs.length) {
+        // 本地路径图片浏览器读不到，直接打开图片面板引导导入修复
+        setAssetsTab("images");
+        setShowAssets(true);
+        toast(
+          `已打开 ${file.name}：检测到 ${localRefs.length} 个本地图片链接，请选择对应图片以修复`,
+          "info",
+        );
+      } else {
+        toast(`已打开 ${file.name}`, "success");
+      }
     },
     [applyBundle, toast],
   );
@@ -1050,6 +1105,8 @@ export default function App() {
         onApplyBodyFont={applyBodyFont}
         onApplyCodeFont={applyCodeFont}
         onInsertImage={handleInsertImage}
+        localImageRefs={localImageRefs}
+        onImportLocalImages={handleImportLocalImages}
         onSaveDocument={saveDocument}
         onClearFonts={handleClearFonts}
         onClearImages={handleClearImages}

@@ -34,6 +34,12 @@ import {
   type FontAsset,
   type ImageAsset,
 } from "../src/core/assets";
+import {
+  findLocalImageRefs,
+  imageBasename,
+  isLocalImageSrc,
+  rewriteLocalImageRefs,
+} from "../src/core/localImages";
 import { parseFontMeta } from "../src/core/fontMeta";
 import type { ExportMeta, PptxOptions, DocxOptions } from "../src/core/types";
 
@@ -91,6 +97,76 @@ console.log("[2b] 标题自动编号");
 const numbered = renderTokens(withHeadingNumbers(parse("# A\n\n## B\n\n## C").tokens));
 check("包含序号 span", numbered.includes("md-secnum"));
 check("二级标题编号 1.2", numbered.includes("1.2 </span>") || numbered.includes("1.1 </span>"));
+
+console.log("[2c] 本地图片链接检测与改写");
+testLocalImages();
+
+function testLocalImages(): void {
+  check("识别相对路径", isLocalImageSrc("./images/a.png"));
+  check("识别 Windows 绝对路径", isLocalImageSrc("C:\\pics\\b.jpg"));
+  check("识别 file://", isLocalImageSrc("file:///home/me/c.png"));
+  check("忽略网络地址", !isLocalImageSrc("https://x/y.png"));
+  check("忽略 data URL", !isLocalImageSrc("data:image/png;base64,AAAA"));
+  check("忽略资源引用", !isLocalImageSrc("asset://img1"));
+
+  check("取小写文件名", imageBasename("./images/Arch.PNG") === "arch.png");
+  check("兼容反斜杠与编码", imageBasename("C:\\pics\\%E7%8C%AB.jpg") === "猫.jpg");
+  check("去掉 query / hash", imageBasename("a/b.png?x=1#y") === "b.png");
+
+  const doc = [
+    "# 标题",
+    "",
+    "![架构图](./images/arch.png)",
+    "![照片](C:\\pics\\cat.jpg \"我的猫\")",
+    "![网络](https://example.com/remote.png)",
+    "<img src='./diagram.svg'>",
+    "",
+    "```",
+    "![示例](./code/ignored.png)",
+    "```",
+    "",
+    "行内 `![示例](inline/ignored.png)` 不算",
+  ].join("\n");
+  const refs = findLocalImageRefs(doc);
+  check("只挑出 3 个本地引用", refs.length === 3, JSON.stringify(refs.map((r) => r.src)));
+  check("引用保留原路径", refs.some((r) => r.src === "./images/arch.png"));
+  check("跳过代码块", !refs.some((r) => r.src.includes("ignored")));
+
+  const { markdown: fixed, replaced, unmatched } = rewriteLocalImageRefs(doc, refs, (ref) =>
+    ref.basename === "arch.png" || ref.basename === "cat.jpg" || ref.basename === "diagram.svg"
+      ? `asset://id-${ref.basename}`
+      : null,
+  );
+  check("全部命中", replaced === 3 && unmatched.length === 0, `replaced=${replaced}`);
+  check("替换为 asset://", fixed.includes("![架构图](asset://id-arch.png)"));
+  check("保留 title", fixed.includes('![照片](asset://id-cat.jpg "我的猫")'));
+  check("保留网络图片", fixed.includes("https://example.com/remote.png"));
+  check("代码块不受影响", fixed.includes("![示例](./code/ignored.png)"));
+
+  const partial = rewriteLocalImageRefs(doc, refs, () => null);
+  check("未命中时保留原文", partial.replaced === 0 && partial.markdown === doc);
+  check("未命中会回报", partial.unmatched.length === 3);
+
+  // 回归：src 必须作为独立属性名匹配，不能被 data-src / 其他属性值里的 src= 抢先
+  const attrDoc = '<img alt="src=wrong.png" data-src="also-wrong.png" src="./right.png">';
+  const attrRefs = findLocalImageRefs(attrDoc);
+  check("只认真正的 src 属性", attrRefs.length === 1 && attrRefs[0].src === "./right.png", JSON.stringify(attrRefs.map((r) => r.src)));
+
+  // 回归：引号内的 > 不应截断标签
+  const gtDoc = '<img alt="a > b" src="./gt.png">';
+  check("引号内 > 不截断标签", findLocalImageRefs(gtDoc).some((r) => r.src === "./gt.png"));
+
+  // 回归：未闭合围栏内的图片视为代码，不应上报
+  const unclosed = "```\n![示例](./code/unclosed.png)\n";
+  check("未闭合围栏内的图片不上报", findLocalImageRefs(unclosed).length === 0);
+  check("未闭合围栏吞掉其后内容", !findLocalImageRefs(unclosed + "\n![真图](./real.png)").some((r) => r.src === "./real.png"));
+  const closedFence = "```\ncode\n```\n![真图](./after.png)";
+  check("闭合围栏后的图片正常上报", findLocalImageRefs(closedFence).some((r) => r.src === "./after.png"));
+
+  // 回归：波浪号围栏按同种标记配对，不能被反引号误闭合
+  const tilde = "~~~\n![示例](./code/tilde.png)\n~~~\n![真图](./t2.png)";
+  check("波浪号围栏正确配对", findLocalImageRefs(tilde).some((r) => r.src === "./t2.png") && !findLocalImageRefs(tilde).some((r) => r.src.includes("tilde")));
+}
 
 console.log("[3] 独立 HTML 文档组装");
 const tokens = resolveTokens(THEME_PRESETS[1]);
